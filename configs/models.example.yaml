@@ -1,0 +1,44 @@
+server:
+  host: "127.0.0.1"
+  port: 8090
+
+runtime:
+  backend: "llamacpp"
+  binary: "/path/to/llama-server"
+  startup_timeout: "120s"
+  shutdown_timeout: "15s"
+
+models:
+  code-fast:
+    path: "/path/to/qwen-coder-14b.gguf"
+    port: 18069
+    context: 16384
+    batch: 1024
+    ubatch: 256
+    gpu_layers: "all"
+    cache_type_k: "q8_0"
+    cache_type_v: "q8_0"
+    parallel: 1
+    temperature: 0.20
+    top_p: 0.85
+    top_k: 40
+    reasoning: "off"
+    extra_args:
+      - "--jinja"
+
+  code-agent:
+    path: "/path/to/qwen-coder-30b.gguf"
+    port: 18070
+    context: 32768
+    batch: 1024
+    ubatch: 256
+    gpu_layers: "all"
+    cache_type_k: "q8_0"
+    cache_type_v: "q8_0"
+    parallel: 1
+    temperature: 0.15
+    top_p: 0.85
+    top_k: 40
+    reasoning: "off"
+    extra_args:
+      - "--jinja"
