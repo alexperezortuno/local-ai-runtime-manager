@@ -1,0 +1,9 @@
+/bin/
+/configs/models.yaml
+.agents
+AGENTS.md
+go.sum
+skills-lock.json
+.vscode
+.idea
+.DS_Store
