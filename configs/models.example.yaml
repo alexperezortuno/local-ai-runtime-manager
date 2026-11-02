@@ -8,6 +8,19 @@ runtime:
   startup_timeout: "120s"
   shutdown_timeout: "15s"
 
+scheduler:
+  max_active_models: 1
+  max_queue_size: 100
+  lease_ttl: "10m"
+  heartbeat_interval: "30s"
+  max_lease_duration: "2h"
+
+proxy:
+  queue_wait_timeout: "5m"
+  inference_timeout: "10m"
+  backend_connect_timeout: "5s"
+  stream_idle_timeout: "2m"
+
 models:
   code-fast:
     path: "/path/to/qwen-coder-14b.gguf"
