@@ -72,8 +72,11 @@ func newHandler(manager *runtime.Manager, sched *scheduler.Scheduler, proxy conf
 	mux.HandleFunc("GET /api/v1/recovery/incidents/{incident_id}", h.recoveryIncident)
 	mux.HandleFunc("GET /api/v1/recovery/incidents", h.recoveryIncidents)
 	mux.HandleFunc("GET /api/v1/recovery/audit", h.recoveryAudit)
-	mux.HandleFunc("POST /api/v1/models/{id}/start", h.start)
-	mux.HandleFunc("POST /api/v1/models/{id}/stop", h.stop)
+	// Mutating model operations stay on the authenticated Unix socket. Keep the
+	// historical paths as explicit conflicts so clients do not mistake removal
+	// for a transient 404 and no public request can reach Runtime Manager.
+	mux.HandleFunc("POST /api/v1/models/{id}/start", h.publicMutationRejected)
+	mux.HandleFunc("POST /api/v1/models/{id}/stop", h.publicMutationRejected)
 	if h.scheduler != nil {
 		mux.HandleFunc("POST /api/v1/leases", h.createLease)
 		mux.HandleFunc("GET /api/v1/leases/{id}", h.getLease)
@@ -85,6 +88,10 @@ func newHandler(manager *runtime.Manager, sched *scheduler.Scheduler, proxy conf
 		mux.HandleFunc("POST /v1/embeddings", h.embeddings)
 	}
 	return mux
+}
+
+func (h *Handler) publicMutationRejected(w http.ResponseWriter, _ *http.Request) {
+	writeError(w, http.StatusConflict, "administrative model operations require the protected Unix socket")
 }
 
 // NewHandlerWithJournal opens the Runtime Core journal before exposing any
@@ -234,6 +241,9 @@ func (h *Handler) recoveryAudit(w http.ResponseWriter, _ *http.Request) {
 
 func (h *Handler) models(w http.ResponseWriter, _ *http.Request) {
 	models := h.manager.Models()
+	if h.scheduler != nil {
+		models = h.scheduler.ModelsSnapshot()
+	}
 	ids := make([]string, 0, len(models))
 	for id := range models {
 		ids = append(ids, id)
@@ -244,34 +254,6 @@ func (h *Handler) models(w http.ResponseWriter, _ *http.Request) {
 		list = append(list, models[id])
 	}
 	writeJSON(w, http.StatusOK, list)
-}
-
-func (h *Handler) start(w http.ResponseWriter, r *http.Request) {
-	var err error
-	if h.scheduler != nil {
-		err = h.scheduler.ManualStart(r.Context(), r.PathValue("id"))
-	} else {
-		err = h.manager.Start(r.Context(), r.PathValue("id"))
-	}
-	if err != nil {
-		writeManagerError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, h.manager.Status())
-}
-
-func (h *Handler) stop(w http.ResponseWriter, r *http.Request) {
-	var err error
-	if h.scheduler != nil {
-		err = h.scheduler.ManualStop(r.Context(), r.PathValue("id"))
-	} else {
-		err = h.manager.Stop(r.Context(), r.PathValue("id"))
-	}
-	if err != nil {
-		writeManagerError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, h.manager.Status())
 }
 
 func (h *Handler) createLease(w http.ResponseWriter, r *http.Request) {
@@ -367,7 +349,7 @@ func writeSchedulerError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, scheduler.ErrQueueFull):
 		writeError(w, http.StatusTooManyRequests, err.Error())
-	case errors.Is(err, scheduler.ErrConflict), errors.Is(err, scheduler.ErrExpired), errors.Is(err, scheduler.ErrInferenceProtected):
+	case errors.Is(err, scheduler.ErrConflict), errors.Is(err, scheduler.ErrExpired), errors.Is(err, scheduler.ErrInferenceProtected), errors.Is(err, scheduler.ErrAlreadyStopped), errors.Is(err, scheduler.ErrCapacity):
 		writeError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, scheduler.ErrClosed), errors.Is(err, runtime.ErrUnavailable):
 		writeError(w, http.StatusServiceUnavailable, err.Error())
