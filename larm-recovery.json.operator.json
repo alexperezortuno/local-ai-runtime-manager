@@ -1,6 +1,201 @@
 {
   "version": 2,
-  "incidents": {},
-  "plans": {},
-  "audit": []
+  "incidents": {
+    "incident-1ba00acf65a4349481223ec3": {
+      "incident_id": "incident-1ba00acf65a4349481223ec3",
+      "incident_type": "PROCESS_IDENTITY_UNVERIFIED",
+      "status": "BLOCKED",
+      "created_at": "2026-11-05T13:29:58.504092Z",
+      "updated_at": "2026-11-05T13:29:58.504092Z",
+      "larm_instance_id": "1b0bf681-8a51-445a-8444-895e9cc86ea5",
+      "model_ids": [
+        "commit"
+      ],
+      "process_instance_ids": [
+        "8d0cdaba-2d0f-4155-b3f0-b77b00450798"
+      ],
+      "process_assignment": "ASSIGNED",
+      "evidence": [
+        {
+          "type": "PROCESS_STATE",
+          "source": "process-supervisor",
+          "subject_kind": "PROCESS_INSTANCE",
+          "subject_id": "8d0cdaba-2d0f-4155-b3f0-b77b00450798",
+          "process_instance_id": "8d0cdaba-2d0f-4155-b3f0-b77b00450798",
+          "model_id": "commit",
+          "observed_at": "2026-11-05T12:54:48.594573Z",
+          "verification_status": "REGISTERED",
+          "guarantee_scope": "PROCESS_TERMINATION",
+          "process_assignment": "ASSIGNED"
+        }
+      ],
+      "blocking_reasons": [
+        "process survivor, PID reuse, or process identity requires explicit recovery; no adoption or signal is permitted"
+      ],
+      "journal_references": [
+        "./larm-recovery.json"
+      ],
+      "recovery_plan_id": "plan-5c7acf7cd15c36529ff4c731",
+      "audit_references": [
+        "06887770-1f1a-47d7-97e7-5cf034294117",
+        "4e247456-0d57-4aa6-9f0b-624367676c11",
+        "2679de5e-b006-475e-850d-c791468f6405"
+      ]
+    },
+    "incident-f0f0734be8e75696aa7fa0f7": {
+      "incident_id": "incident-f0f0734be8e75696aa7fa0f7",
+      "incident_type": "JOURNAL_DIRTY",
+      "status": "BLOCKED",
+      "created_at": "2026-11-05T13:29:58.504081Z",
+      "updated_at": "2026-11-05T13:29:58.504082Z",
+      "larm_instance_id": "1b0bf681-8a51-445a-8444-895e9cc86ea5",
+      "process_assignment": "",
+      "evidence": [
+        {
+          "type": "JOURNAL_STATE",
+          "source": "inference-journal",
+          "subject_id": "journal",
+          "observed_at": "2026-11-05T12:54:50.023801Z",
+          "verification_status": "INSUFFICIENT",
+          "guarantee_scope": "RECOVERY"
+        }
+      ],
+      "blocking_reasons": [
+        "journal was not closed cleanly"
+      ],
+      "journal_references": [
+        "./larm-recovery.json"
+      ],
+      "recovery_plan_id": "plan-4d37d6bc02998619299da043",
+      "audit_references": [
+        "d8afae8c-efea-4c25-9082-c3ed18612feb",
+        "1ef7da56-4bfc-4cd8-936d-5cb9e6b50448",
+        "ab241ceb-ef1b-42fd-8a8c-070a505c2291"
+      ]
+    }
+  },
+  "plans": {
+    "plan-4d37d6bc02998619299da043": {
+      "plan_id": "plan-4d37d6bc02998619299da043",
+      "incident_id": "incident-f0f0734be8e75696aa7fa0f7",
+      "created_at": "2026-11-05T13:29:58.504119Z",
+      "snapshot_version": "dfc871e670179f9a02b32e1345ffbb6bf32efc0be22e5f2c359e90ed38a87309",
+      "evidence_digest": "8edea7319ad2cc2531616ff098f552548e11ddb505d303db06f5ee432280af10",
+      "required_preconditions": [
+        "all correlated stores agree",
+        "all associated inferences have verified terminal evidence",
+        "scheduler protection is revalidated",
+        "operator authentication is verified"
+      ],
+      "verified_preconditions": null,
+      "missing_evidence": [
+        "verified backend/process termination or durable non-process proof where required",
+        "authenticated operator identity"
+      ],
+      "proposed_action": "NO_RELEASE_OR_UNLOCK_WITHOUT_VERIFIED_EVIDENCE",
+      "safety_classification": "BLOCKED_INSUFFICIENT_EVIDENCE",
+      "blocking_reasons": [
+        "journal was not closed cleanly"
+      ]
+    },
+    "plan-5c7acf7cd15c36529ff4c731": {
+      "plan_id": "plan-5c7acf7cd15c36529ff4c731",
+      "incident_id": "incident-1ba00acf65a4349481223ec3",
+      "created_at": "2026-11-05T13:29:58.50413Z",
+      "snapshot_version": "dfc871e670179f9a02b32e1345ffbb6bf32efc0be22e5f2c359e90ed38a87309",
+      "evidence_digest": "e6b976b65b48769e28ccc874fa9f980e352d4a7c15ee0f1626be884870228746",
+      "required_preconditions": [
+        "all correlated stores agree",
+        "all associated inferences have verified terminal evidence",
+        "scheduler protection is revalidated",
+        "operator authentication is verified"
+      ],
+      "verified_preconditions": null,
+      "missing_evidence": [
+        "verified backend/process termination or durable non-process proof where required",
+        "authenticated operator identity"
+      ],
+      "proposed_action": "NO_RELEASE_OR_UNLOCK_WITHOUT_VERIFIED_EVIDENCE",
+      "safety_classification": "BLOCKED_PROCESS_IDENTITY",
+      "blocking_reasons": [
+        "process survivor, PID reuse, or process identity requires explicit recovery; no adoption or signal is permitted"
+      ]
+    }
+  },
+  "audit": [
+    {
+      "event_id": "d8afae8c-efea-4c25-9082-c3ed18612feb",
+      "incident_id": "incident-f0f0734be8e75696aa7fa0f7",
+      "timestamp": "2026-11-05T13:29:58.5041Z",
+      "actor": "UNVERIFIED",
+      "action": "INCIDENT_DETECTED",
+      "result": "BLOCKED",
+      "evidence": [
+        "JOURNAL_STATE:journal"
+      ],
+      "rejection_reason": "journal was not closed cleanly"
+    },
+    {
+      "event_id": "1ef7da56-4bfc-4cd8-936d-5cb9e6b50448",
+      "incident_id": "incident-f0f0734be8e75696aa7fa0f7",
+      "timestamp": "2026-11-05T13:29:58.504101Z",
+      "actor": "UNVERIFIED",
+      "action": "DIAGNOSIS_COMPLETED",
+      "result": "BLOCKED",
+      "evidence": [
+        "JOURNAL_STATE:journal"
+      ],
+      "rejection_reason": "journal was not closed cleanly"
+    },
+    {
+      "event_id": "ab241ceb-ef1b-42fd-8a8c-070a505c2291",
+      "incident_id": "incident-f0f0734be8e75696aa7fa0f7",
+      "plan_id": "plan-4d37d6bc02998619299da043",
+      "timestamp": "2026-11-05T13:29:58.504121Z",
+      "actor": "UNVERIFIED",
+      "action": "PLAN_GENERATED",
+      "result": "BLOCKED",
+      "evidence": [
+        "JOURNAL_STATE:journal"
+      ],
+      "rejection_reason": "journal was not closed cleanly"
+    },
+    {
+      "event_id": "06887770-1f1a-47d7-97e7-5cf034294117",
+      "incident_id": "incident-1ba00acf65a4349481223ec3",
+      "timestamp": "2026-11-05T13:29:58.504123Z",
+      "actor": "UNVERIFIED",
+      "action": "INCIDENT_DETECTED",
+      "result": "BLOCKED",
+      "evidence": [
+        "PROCESS_STATE:8d0cdaba-2d0f-4155-b3f0-b77b00450798"
+      ],
+      "rejection_reason": "process survivor, PID reuse, or process identity requires explicit recovery; no adoption or signal is permitted"
+    },
+    {
+      "event_id": "4e247456-0d57-4aa6-9f0b-624367676c11",
+      "incident_id": "incident-1ba00acf65a4349481223ec3",
+      "timestamp": "2026-11-05T13:29:58.504124Z",
+      "actor": "UNVERIFIED",
+      "action": "DIAGNOSIS_COMPLETED",
+      "result": "BLOCKED",
+      "evidence": [
+        "PROCESS_STATE:8d0cdaba-2d0f-4155-b3f0-b77b00450798"
+      ],
+      "rejection_reason": "process survivor, PID reuse, or process identity requires explicit recovery; no adoption or signal is permitted"
+    },
+    {
+      "event_id": "2679de5e-b006-475e-850d-c791468f6405",
+      "incident_id": "incident-1ba00acf65a4349481223ec3",
+      "plan_id": "plan-5c7acf7cd15c36529ff4c731",
+      "timestamp": "2026-11-05T13:29:58.504132Z",
+      "actor": "UNVERIFIED",
+      "action": "PLAN_GENERATED",
+      "result": "BLOCKED",
+      "evidence": [
+        "PROCESS_STATE:8d0cdaba-2d0f-4155-b3f0-b77b00450798"
+      ],
+      "rejection_reason": "process survivor, PID reuse, or process identity requires explicit recovery; no adoption or signal is permitted"
+    }
+  ]
 }
