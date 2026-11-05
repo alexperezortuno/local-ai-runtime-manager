@@ -12,11 +12,13 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
 
 	"local-ai-runtime/internal/config"
+	"local-ai-runtime/internal/inference"
 	runtime "local-ai-runtime/internal/runtime"
 	"local-ai-runtime/internal/scheduler"
 )
@@ -28,6 +30,21 @@ func TestMain(m *testing.M) {
 			if arg == "--port" && i+1 < len(os.Args) {
 				port = os.Args[i+1]
 			}
+		}
+		if os.Getenv("LARM_API_STARTUP_MODE") == "blocked" {
+			barrier := os.Getenv("LARM_API_STARTUP_BARRIER")
+			if barrier != "" {
+				_ = os.WriteFile(filepath.Join(barrier, "preparing"), []byte("readiness blocked\n"), 0600)
+			}
+			signals := make(chan os.Signal, 1)
+			signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT)
+			if sig := <-signals; sig == syscall.SIGTERM && barrier != "" {
+				_ = os.WriteFile(filepath.Join(barrier, "cancelled"), []byte("startup cancelled\n"), 0600)
+				signal.Stop(signals)
+				_ = syscall.Kill(os.Getpid(), syscall.SIGTERM)
+				select {}
+			}
+			os.Exit(0)
 		}
 		server := &http.Server{Addr: "127.0.0.1:" + port, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/health" {
@@ -70,6 +87,9 @@ func TestMain(m *testing.M) {
 				flusher.Flush()
 				if os.Getenv("LARM_API_BACKEND_MODE") == "hangstream" {
 					<-r.Context().Done()
+					return
+				}
+				if os.Getenv("LARM_API_BACKEND_MODE") == "truncated" {
 					return
 				}
 				_, _ = io.WriteString(w, "data: {\"choices\":[{\"delta\":{\"content\":\"two\"}}]}\n\ndata: [DONE]\n\n")
@@ -176,6 +196,143 @@ func TestLeaseHTTPFlowAndLegacyStatus(t *testing.T) {
 	if bad.StatusCode != http.StatusNotFound {
 		t.Fatalf("unknown model status = %d", bad.StatusCode)
 	}
+}
+
+func TestIdempotentLeaseHTTPReplayConflictAndValidation(t *testing.T) {
+	manager, sched := apiTestScheduler(t)
+	server := httptest.NewServer(NewHandler(manager, sched))
+	defer server.Close()
+	client := server.Client()
+	key := "2ef8d7ef-b335-4404-b72c-5b2c08a36101"
+	post := func(model, idempotencyKey string) *http.Response {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodPost, server.URL+"/api/v1/leases", strings.NewReader(`{"model":"`+model+`"}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if idempotencyKey != "<absent>" {
+			req.Header["Idempotency-Key"] = []string{idempotencyKey}
+		}
+		response, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return response
+	}
+	first := post("model-1", key)
+	if first.StatusCode != http.StatusAccepted {
+		t.Fatalf("first keyed acquisition status = %d", first.StatusCode)
+	}
+	_ = first.Body.Close() // Simulate losing the response after scheduler acceptance.
+	retry := post("model-1", key)
+	var original scheduler.LeaseStatus
+	if retry.StatusCode != http.StatusAccepted || json.NewDecoder(retry.Body).Decode(&original) != nil {
+		_ = retry.Body.Close()
+		t.Fatalf("retry status = %d", retry.StatusCode)
+	}
+	_ = retry.Body.Close()
+	if original.ID == "" {
+		t.Fatal("retry did not recover lease identifier")
+	}
+	waitHTTPLease(t, client, server.URL, original.ID, scheduler.Active)
+	activeReplay := post("model-1", key)
+	var activeLease scheduler.LeaseStatus
+	if activeReplay.StatusCode != http.StatusOK || json.NewDecoder(activeReplay.Body).Decode(&activeLease) != nil || activeLease.ID != original.ID {
+		_ = activeReplay.Body.Close()
+		t.Fatalf("active retry status/body = %d %+v", activeReplay.StatusCode, activeLease)
+	}
+	_ = activeReplay.Body.Close()
+	conflict := post("model-2", key)
+	_ = conflict.Body.Close()
+	if conflict.StatusCode != http.StatusConflict {
+		t.Fatalf("different model with reused key status = %d", conflict.StatusCode)
+	}
+	for _, invalid := range []string{"", "not-a-uuid", "2ef8d7ef-b335-4404-b72c-5b2c08a3610z"} {
+		response := post("model-1", invalid)
+		_ = response.Body.Close()
+		if response.StatusCode != http.StatusBadRequest {
+			t.Fatalf("invalid key %q status = %d", invalid, response.StatusCode)
+		}
+	}
+	if _, err := sched.Get(original.ID); err != nil {
+		t.Fatalf("replay lease lookup: %v", err)
+	}
+	if _, err := sched.Release(original.ID); err != nil {
+		t.Fatal(err)
+	}
+	terminal := post("model-1", key)
+	_ = terminal.Body.Close()
+	if terminal.StatusCode != http.StatusConflict {
+		t.Fatalf("terminal replay status = %d", terminal.StatusCode)
+	}
+}
+
+func TestConcurrentIdempotentLeaseHTTPRequestsShareLease(t *testing.T) {
+	manager, sched := apiTestScheduler(t)
+	server := httptest.NewServer(NewHandler(manager, sched))
+	defer server.Close()
+	const count = 24
+	ids := make([]string, count)
+	statuses := make([]int, count)
+	var wg sync.WaitGroup
+	for i := range ids {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			req, _ := http.NewRequest(http.MethodPost, server.URL+"/api/v1/leases", strings.NewReader(`{"model":"model-1"}`))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Idempotency-Key", "3ef8d7ef-b335-4404-b72c-5b2c08a36102")
+			response, err := server.Client().Do(req)
+			if err != nil {
+				return
+			}
+			statuses[i] = response.StatusCode
+			var lease scheduler.LeaseStatus
+			if err := json.NewDecoder(response.Body).Decode(&lease); err == nil {
+				ids[i] = lease.ID
+			}
+			_ = response.Body.Close()
+		}(i)
+	}
+	wg.Wait()
+	for i := range ids {
+		if ids[i] == "" || ids[i] != ids[0] || statuses[i] != http.StatusAccepted {
+			t.Fatalf("concurrent result %d: id=%q status=%d, all=%v", i, ids[i], statuses[i], ids)
+		}
+	}
+}
+
+func TestRecoveryEndpointsAreReadOnlyAndMetadataOnly(t *testing.T) {
+	journal, err := inference.OpenJournal(inference.JournalOptions{Path: filepath.Join(t.TempDir(), "recovery.json")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, _, err := NewHandlerWithJournal(nil, nil, config.ProxyConfig{}, journal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	for _, path := range []string{"/api/v1/recovery/status", "/api/v1/recovery/inferences", "/api/v1/recovery/leases", "/api/v1/recovery/incidents", "/api/v1/recovery/audit"} {
+		response, err := server.Client().Get(server.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s status = %d", path, response.StatusCode)
+		}
+		_ = response.Body.Close()
+	}
+	request, _ := http.NewRequest(http.MethodPost, server.URL+"/api/v1/recovery/status", nil)
+	response, err := server.Client().Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("POST recovery status = %d", response.StatusCode)
+	}
+	_ = response.Body.Close()
 }
 
 func apiTestScheduler(t *testing.T) (*runtime.Manager, *scheduler.Scheduler) {
