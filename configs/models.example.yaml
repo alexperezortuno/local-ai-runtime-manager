@@ -9,7 +9,7 @@ runtime:
   shutdown_timeout: "15s"
 
 scheduler:
-  max_active_models: 1
+  max_active_models: 3
   max_queue_size: 100
   lease_ttl: "10m"
   heartbeat_interval: "30s"
@@ -20,6 +20,21 @@ proxy:
   inference_timeout: "10m"
   backend_connect_timeout: "5s"
   stream_idle_timeout: "2m"
+
+recovery:
+  journal_path: "./larm-recovery.json"
+  durability: "sync"
+  max_records: 10000
+
+# Disabled by default. Enabling requires a private Unix socket directory,
+# a private Ed25519 public-key ring, and an explicitly allowed UID.
+admin:
+  enabled: false
+  socket_path: "/var/run/larm/admin.sock"
+  public_key_path: "/var/lib/larm/admin-public-keys.json"
+  allowed_uid: 1000
+  audience: "larm-admin"
+  capability_ttl: "5m"
 
 models:
   code-fast:
@@ -36,6 +51,8 @@ models:
     top_p: 0.85
     top_k: 40
     reasoning: "off"
+    keep_alive: false
+    time_alive: "10m"
     extra_args:
       - "--jinja"
 
@@ -53,5 +70,7 @@ models:
     top_p: 0.85
     top_k: 40
     reasoning: "off"
+    keep_alive: true
+    time_alive: "0s" # keep_alive takes precedence
     extra_args:
       - "--jinja"
