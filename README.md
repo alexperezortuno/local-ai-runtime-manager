@@ -1,13 +1,13 @@
 # Local AI Runtime Manager (LARM)
 
-LARM es un servicio Go independiente de clientes e IDEs que registra modelos GGUF, administra un único proceso local de `llama-server` y ofrece un proxy de inferencia compatible con los endpoints esenciales de OpenAI.
+LARM es un servicio Go independiente de clientes e IDEs que registra modelos GGUF, administra procesos locales de `llama-server` bajo demanda y ofrece un proxy de inferencia compatible con los endpoints esenciales de OpenAI.
 
 ## Arquitectura
 
 - `internal/config`: carga YAML, expansión de variables y validación de rutas, puertos y parámetros.
 - `internal/models`: registro inmutable de modelos configurados.
-- `internal/runtime`: serializa operaciones y supervisa el proceso/grupo de procesos.
-- `internal/scheduler`: worker único, cola FIFO global y leases de exclusividad sobre el runtime.
+- `internal/runtime`: supervisa cada proceso/grupo de procesos y conserva su identidad.
+- `internal/scheduler`: worker único, cola FIFO global, leases y políticas de residencia.
 - `internal/api/proxy.go`: proxy OpenAI para chat, SSE y embeddings; delega carga/descarga al scheduler.
 - `internal/backend`: argumentos de `llama-server` y sondeo `/health`.
 - `internal/api`: API HTTP con `net/http`.
@@ -69,12 +69,16 @@ models:
     top_k: 40
     reasoning: "off"
     extra_args: ["--jinja"]
+    keep_alive: false
+    time_alive: "5m"
 scheduler:
   max_active_models: 1
   max_queue_size: 100
   lease_ttl: "10m"
   heartbeat_interval: "30s"
   max_lease_duration: "2h"
+  # Opcional; por defecto se usa <ruta-config>.idempotency.json
+  # idempotency_store: "/var/lib/larm/leases.json"
 ```
 
 Al iniciar se validan el binario ejecutable, los archivos, los IDs, puertos y parámetros. Cada modelo necesita un puerto propio, distinto del puerto de la API.
@@ -85,11 +89,14 @@ Al iniciar se validan el binario ejecutable, los archivos, los IDs, puertos y pa
 curl http://127.0.0.1:8090/health
 curl http://127.0.0.1:8090/api/v1/models
 curl http://127.0.0.1:8090/api/v1/status
+curl http://127.0.0.1:8090/api/v1/processes
 curl -X POST http://127.0.0.1:8090/api/v1/models/code-fast/start
 curl -X POST http://127.0.0.1:8090/api/v1/models/code-fast/stop
 ```
 
 Las operaciones de control esperan a que el backend esté listo o a que termine el apagado. Errores de modelo inexistente, conflicto y backend no disponible responden con `404`, `409` y `503`, respectivamente.
+
+`GET /api/v1/processes` y `GET /api/v1/processes/{process_instance_id}` son consultas read-only de identidad, ownership, grupo, evidencia y terminación. LARM no considera `SIGTERM`, `SIGKILL`, `Wait()` ni un puerto cerrado como prueba de terminación: si el grupo o descendientes no pueden verificarse, conserva `TERMINATION_UNKNOWN` y bloquea el cambio de modelo.
 
 ### Scheduler y reservas
 
@@ -102,6 +109,12 @@ El ciclo de una reserva es `QUEUED → PREPARING → ACTIVE → COMPLETED` (libe
 curl -X POST http://127.0.0.1:8090/api/v1/leases \
   -H 'Content-Type: application/json' -d '{"model":"code-agent"}'
 
+# Opcional: reintentar el mismo POST de forma idempotente
+curl -X POST http://127.0.0.1:8090/api/v1/leases \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: 2ef8d7ef-b335-4404-b72c-5b2c08a36101' \
+  -d '{"model":"code-agent"}'
+
 curl http://127.0.0.1:8090/api/v1/leases/LEASE_ID
 curl -X POST http://127.0.0.1:8090/api/v1/leases/LEASE_ID/heartbeat
 curl -X DELETE http://127.0.0.1:8090/api/v1/leases/LEASE_ID
@@ -109,11 +122,17 @@ curl http://127.0.0.1:8090/api/v1/queue
 curl http://127.0.0.1:8090/api/v1/status
 ```
 
-`GET /api/v1/leases/{id}` incluye `queue_position` (1-based; cero si no está encolada). `GET /api/v1/queue` y `/status` informan la reserva activa, la que está preparando y la cola pendiente. Una cola llena responde `429`; IDs/modelos desconocidos, `404`; heartbeat no aplicable o lease expirado, `409`.
+`GET /api/v1/leases/{id}` incluye `queue_position` (1-based; cero si no está encolada). `GET /api/v1/queue` y `/status` informan la reserva activa, la que está preparando, la cola pendiente y los modelos residentes con su política, PID y `ProcessInstanceID`. Una cola llena responde `429`; IDs/modelos desconocidos, `404`; heartbeat no aplicable o lease expirado, `409`.
+
+`POST /api/v1/leases` acepta opcionalmente `Idempotency-Key`, en UUID textual `8-4-4-4-12` hexadecimal (no vacío; mayúsculas se normalizan). Sin el header conserva el comportamiento previo. Una clave nueva crea un registro durable antes de añadir una sola lease a FIFO. Un retry con la misma solicitud devuelve la lease/posición original (`202` en `QUEUED`/`PREPARING`, `200` en `ACTIVE`); no renueva TTL ni heartbeat. La única solicitud actual es `model`: su huella es SHA-256 de JSON compacto canónico `{"model":<valor JSON del model decodificado>}`; el valor de modelo es exacto y sensible a mayúsculas. La misma clave con otro modelo devuelve `409`.
+
+Una clave inválida devuelve `400`; un retry de una operación terminal (`COMPLETED`, `EXPIRED`, `CANCELLED` o `FAILED`) devuelve `409` con el estado y snapshot original y nunca recrea la lease. El store registra actividad sucia antes de admitir adquisiciones/arranques y marca apagado limpio solo después de detener el runtime. Si LARM reinicia con estado sucio o una operación no terminal, no restaura ownership ni relanza `llama-server`: conserva IDs históricos y responde `503` (`RECOVERY_REQUIRED`). Mientras exista esa recuperación, bloquea nuevas adquisiciones (con y sin clave) y arranques manuales para no cargar un runtime con ownership desconocido. Requiere intervención operativa; no se adopta ni detiene automáticamente el proceso que sobreviviera a la caída. Un reinicio limpio conserva tombstones terminales y permite claves nuevas. El archivo se guarda atómicamente con permisos `0600`; por defecto está junto al archivo YAML como `<ruta-config>.idempotency.json`, o se configura con `scheduler.idempotency_store`. Las claves/tombstones se retienen indefinidamente (sin limpieza automática); eliminar el archivo reinicia el ámbito de idempotencia, por lo que se debe hacer solo con LARM detenido, tras resolver procesos huérfanos y sin reutilizar claves anteriores. Un archivo no debe compartirse entre procesos LARM independientes.
 
 Los endpoints manuales de LARM-001 se conservan y usan el mismo worker. Solo se aceptan cuando no hay leases activas, solicitudes en preparación ni cola pendiente; de otro modo responden `409`. Así no pueden adelantarse a la cola ni detener un modelo reservado. Una operación manual ya aceptada se procesa antes de leases que lleguen después.
 
-La configuración `scheduler` admite `max_active_models` (debe ser `1`), `max_queue_size` (por defecto `100`), `lease_ttl` (`10m`), `heartbeat_interval` (`30s`) y `max_lease_duration` (`2h`). Los tres tiempos deben ser positivos; heartbeat debe ser menor que TTL y la duración máxima al menos igual al TTL.
+La configuración `scheduler` admite `max_active_models` (positivo), `max_queue_size` (por defecto `100`), `lease_ttl` (`10m`), `heartbeat_interval` (`30s`) y `max_lease_duration` (`2h`). Los tres tiempos deben ser positivos; heartbeat debe ser menor que TTL y la duración máxima al menos igual al TTL.
+
+Cada modelo admite `keep_alive` (por defecto `false`) y `time_alive` (por defecto `"0s"`). `keep_alive: true` mantiene el proceso cargado después de liberar la lease; no precarga el modelo y tiene precedencia sobre `time_alive`. Con `keep_alive: false`, `time_alive` retiene el proceso sólo durante ese período de inactividad. Las duraciones deben ser válidas para `time.Duration` y no negativas. Lease, residencia y Recovery son responsabilidades independientes.
 
 Un fallo de arranque marca la lease `FAILED` y el worker continúa. Una caída inesperada también falla la lease activa; el siguiente trabajo se procesa sin adoptar procesos externos. Al apagar LARM, las leases activas y pendientes se marcan `CANCELLED`, se cancelan cargas e inferencias en curso y se detiene el backend después de que las referencias de inferencia finalicen.
 
@@ -158,12 +177,12 @@ El proxy reenvía las respuestas JSON y los eventos SSE de `llama-server`, inclu
 
 ## Estados
 
-`STOPPED → STARTING → READY`, con `FAILED` ante un fallo de inicio o salida inesperada; `READY → STOPPING → STOPPED` al detener. Se permite un único modelo activo. Un `Start` repetido para el mismo modelo listo es idempotente.
+`STOPPED → STARTING → READY`, con `FAILED` ante un fallo de inicio o salida inesperada; `READY → STOPPING → STOPPED` al detener. `max_active_models` limita estrictamente los procesos residentes. Un `Start` repetido para el mismo modelo listo es idempotente.
 
 ## Limitaciones actuales
 
 - Solo implementa los tres endpoints listados; no incluye Responses API, audio, imágenes ni otros endpoints OpenAI.
-- No incluye prioridades, preempción, persistencia de cola, múltiples modelos residentes ni autenticación multiusuario.
+- No incluye prioridades, persistencia de cola, gestor de memoria RAM/VRAM ni autenticación multiusuario.
 - Solo administra procesos `llama-server` iniciados por LARM; no adopta procesos externos.
 - No valida que el modelo pueda cargarse en la memoria/GPU disponible; readiness lo determina el endpoint `/health`.
 - Los argumentos avanzados dependen de la versión/compilación de `llama-server` instalada.
