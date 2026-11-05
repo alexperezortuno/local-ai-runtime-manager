@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -279,6 +281,378 @@ func TestThreeRequestsRemainFIFO(t *testing.T) {
 	_, _ = s.Release(third.ID)
 }
 
+func TestIdempotentAcquisitionReplaysWithoutChangingFIFOOrTTL(t *testing.T) {
+	_, s := testScheduler(t, "normal", 2, time.Second, time.Second, 5, 2*time.Second, 100*time.Millisecond)
+	hold, err := s.Request("model-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitLease(t, s, hold.ID, Active)
+	first, replay, err := s.RequestIdempotent("2ef8d7ef-b335-4404-b72c-5b2c08a36101", "model-1")
+	if err != nil || replay || first.State != Queued {
+		t.Fatalf("first acquisition = %+v replay=%v err=%v", first, replay, err)
+	}
+	second, err := s.Request("model-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	retried, replay, err := s.RequestIdempotent("2ef8d7ef-b335-4404-b72c-5b2c08a36101", "model-1")
+	if err != nil || !replay || retried.ID != first.ID || retried.QueuePosition != first.QueuePosition {
+		t.Fatalf("queued replay = %+v replay=%v err=%v", retried, replay, err)
+	}
+	if got, _ := s.Get(second.ID); got.QueuePosition != 2 {
+		t.Fatalf("expected second request behind first in FIFO: %+v", got)
+	}
+	if _, err := s.Release(hold.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitLease(t, s, first.ID, Active)
+	activeBefore, _ := s.Get(first.ID)
+	time.Sleep(30 * time.Millisecond)
+	activeAfter, replay, err := s.RequestIdempotent("2ef8d7ef-b335-4404-b72c-5b2c08a36101", "model-1")
+	if err != nil || !replay || activeAfter.ID != first.ID || !activeAfter.ExpiresAt.Equal(*activeBefore.ExpiresAt) {
+		t.Fatalf("active replay renewed/changed lease: before=%+v after=%+v replay=%v err=%v", activeBefore, activeAfter, replay, err)
+	}
+	if got, _ := s.Get(second.ID); got.QueuePosition != 1 {
+		t.Fatalf("retry altered following FIFO position: %+v", got)
+	}
+	if _, _, err := s.RequestIdempotent("2ef8d7ef-b335-4404-b72c-5b2c08a36101", "model-2"); err != ErrIdempotencyConflict {
+		t.Fatalf("different model error = %v", err)
+	}
+	_, _ = s.Release(first.ID)
+	if got, replay, err := s.RequestIdempotent("2ef8d7ef-b335-4404-b72c-5b2c08a36101", "model-1"); err != ErrIdempotencyTerminal || !replay || got.State != Completed {
+		t.Fatalf("terminal replay = %+v replay=%v err=%v", got, replay, err)
+	}
+}
+
+func TestConcurrentSameIdempotencyKeyCreatesOneQueueEntry(t *testing.T) {
+	_, s := testScheduler(t, "normal", 1, time.Second, time.Second, 5, time.Second, 100*time.Millisecond)
+	const callers = 32
+	results := make([]LeaseStatus, callers)
+	var wg sync.WaitGroup
+	for i := range results {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			results[i], _, _ = s.RequestIdempotent("3ef8d7ef-b335-4404-b72c-5b2c08a36102", "model-1")
+		}(i)
+	}
+	wg.Wait()
+	for _, got := range results {
+		if got.ID == "" || got.ID != results[0].ID {
+			t.Fatalf("concurrent requests produced different leases: %+v", results)
+		}
+	}
+	if snapshot := s.Snapshot(); len(snapshot.Pending) > 1 || (snapshot.Active != nil && snapshot.Active.ID != results[0].ID) {
+		t.Fatalf("duplicate operation reached scheduler: %+v", snapshot)
+	}
+}
+
+func TestDifferentIdempotencyKeysKeepAcceptanceFIFO(t *testing.T) {
+	_, s := testScheduler(t, "normal", 2, time.Second, time.Second, 5, time.Second, 100*time.Millisecond)
+	active, err := s.Request("model-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitLease(t, s, active.ID, Active)
+	first, _, err := s.RequestIdempotent("aef8d7ef-b335-4404-b72c-5b2c08a36109", "model-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, _, err := s.RequestIdempotent("bef8d7ef-b335-4404-b72c-5b2c08a36110", "model-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.QueuePosition != 1 || second.QueuePosition != 2 {
+		t.Fatalf("distinct keys did not keep FIFO acceptance order: first=%+v second=%+v", first, second)
+	}
+}
+
+func TestIdempotencyStoreRestartRequiresRecoveryAndNeverRecreates(t *testing.T) {
+	_, s, store := testSchedulerWithStore(t, "normal", 1, time.Second, time.Second, 5, 2*time.Second, 100*time.Millisecond, true)
+	key := "4ef8d7ef-b335-4404-b72c-5b2c08a36103"
+	created, _, err := s.RequestIdempotent(key, "model-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitLease(t, s, created.ID, Active)
+	manager := s.manager
+	setIdempotencyPath(s, "")
+	restarted, err := NewWithIdempotencyStore(manager, config.SchedulerConfig{MaxQueueSize: 5, LeaseTTL: "2s", Heartbeat: "100ms", MaxLease: "20s"}, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { shutdownScheduler(t, restarted) })
+	replayed, replay, err := restarted.RequestIdempotent(key, "model-1")
+	if err != ErrIdempotencyRecovery || !replay || replayed.ID != created.ID || replayed.State != RecoveryRequired {
+		t.Fatalf("restart replay = %+v replay=%v err=%v", replayed, replay, err)
+	}
+	if snapshot := restarted.Snapshot(); snapshot.Active != nil || len(snapshot.Pending) != 0 || snapshot.Preparing != nil {
+		t.Fatalf("restart reactivated historical lease: %+v", snapshot)
+	}
+	if _, err := restarted.Request("model-1"); err != ErrIdempotencyRecovery {
+		t.Fatalf("legacy acquisition was not blocked during recovery: %v", err)
+	}
+	if _, _, err := restarted.RequestIdempotent("f2f8d7ef-b335-4404-b72c-5b2c08a36116", "model-1"); err != ErrIdempotencyRecovery {
+		t.Fatalf("new keyed acquisition was not blocked during recovery: %v", err)
+	}
+}
+
+func TestIdempotencyQueuedReservationAfterRestartIsRecoveryRequired(t *testing.T) {
+	_, s, store := testSchedulerWithStore(t, "normal", 1, time.Second, time.Second, 5, 2*time.Second, 100*time.Millisecond, true)
+	hold, err := s.Request("model-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitLease(t, s, hold.ID, Active)
+	key := "cef8d7ef-b335-4404-b72c-5b2c08a36111"
+	queued, _, err := s.RequestIdempotent(key, "model-1")
+	if err != nil || queued.State != Queued {
+		t.Fatalf("queued reservation = %+v err=%v", queued, err)
+	}
+	setIdempotencyPath(s, "")
+	restarted, err := NewWithIdempotencyStore(s.manager, config.SchedulerConfig{MaxQueueSize: 5, LeaseTTL: "2s", Heartbeat: "100ms", MaxLease: "20s"}, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { shutdownScheduler(t, restarted) })
+	got, replay, err := restarted.RequestIdempotent(key, "model-1")
+	if err != ErrIdempotencyRecovery || !replay || got.ID != queued.ID || got.State != RecoveryRequired {
+		t.Fatalf("queued crash recovery = %+v replay=%v err=%v", got, replay, err)
+	}
+}
+
+func TestIdempotencyStoreWriteFailureDoesNotAcceptOrReserve(t *testing.T) {
+	_, s := testScheduler(t, "normal", 1, time.Second, time.Second, 5, time.Second, 100*time.Millisecond)
+	setIdempotencyPath(s, t.TempDir())
+	key := "def8d7ef-b335-4404-b72c-5b2c08a36112"
+	if _, _, err := s.RequestIdempotent(key, "model-1"); err == nil {
+		t.Fatal("expected durable reservation write failure")
+	}
+	if snapshot := s.Snapshot(); snapshot.Active != nil || snapshot.Preparing != nil || len(snapshot.Pending) != 0 {
+		t.Fatalf("failed persistence accepted an operation: %+v", snapshot)
+	}
+	setIdempotencyPath(s, "")
+	if _, replay, err := s.RequestIdempotent(key, "model-1"); err != nil || replay {
+		t.Fatalf("failed reservation left a key behind: replay=%v err=%v", replay, err)
+	}
+}
+
+func TestReleaseDoesNotPublishWhenDurableSyncFails(t *testing.T) {
+	_, s, _ := testSchedulerWithStore(t, "normal", 1, time.Second, time.Second, 5, time.Second, 100*time.Millisecond, true)
+	lease, _, err := s.RequestIdempotent("def8d7ef-b335-4404-b72c-5b2c08a36112", "model-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitLease(t, s, lease.ID, Active)
+	setIdempotencyPath(s, t.TempDir()) // rename cannot replace a directory
+	if _, err := s.Release(lease.ID); err == nil {
+		t.Fatal("release succeeded without durable evidence")
+	}
+	if got, _ := s.Get(lease.ID); got.State != Active {
+		t.Fatalf("failed release changed in-memory state: %+v", got)
+	}
+}
+
+func TestIdempotencyTerminalTombstoneSurvivesRestart(t *testing.T) {
+	_, s, store := testSchedulerWithStore(t, "normal", 1, time.Second, time.Second, 5, 2*time.Second, 100*time.Millisecond, true)
+	key := "e1f8d7ef-b335-4404-b72c-5b2c08a36114"
+	created, _, err := s.RequestIdempotent(key, "model-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitLease(t, s, created.ID, Active)
+	if _, err := s.Release(created.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(store); err != nil {
+		t.Fatalf("terminal tombstone store was cleaned: %v", err)
+	}
+	shutdownScheduler(t, s)
+	restarted, err := NewWithIdempotencyStore(s.manager, config.SchedulerConfig{MaxQueueSize: 5, LeaseTTL: "2s", Heartbeat: "100ms", MaxLease: "20s"}, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { shutdownScheduler(t, restarted) })
+	got, replay, err := restarted.RequestIdempotent(key, "model-1")
+	if err != ErrIdempotencyTerminal || !replay || got.ID != created.ID || got.State != Completed {
+		t.Fatalf("terminal tombstone replay = %+v replay=%v err=%v", got, replay, err)
+	}
+	if _, replay, err := restarted.RequestIdempotent("e2f8d7ef-b335-4404-b72c-5b2c08a36115", "model-1"); err != nil || replay {
+		t.Fatalf("clean restart blocked a new key: replay=%v err=%v", replay, err)
+	}
+}
+
+func TestUnkeyedActivityIsMarkedDirtyAndBlocksAfterCrash(t *testing.T) {
+	_, s, store := testSchedulerWithStore(t, "normal", 1, time.Second, time.Second, 5, 2*time.Second, 100*time.Millisecond, true)
+	if _, err := s.Request("model-1"); err != nil {
+		t.Fatal(err)
+	}
+	setIdempotencyPath(s, "")
+	restarted, err := NewWithIdempotencyStore(s.manager, config.SchedulerConfig{MaxQueueSize: 5, LeaseTTL: "2s", Heartbeat: "100ms", MaxLease: "20s"}, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { shutdownScheduler(t, restarted) })
+	if _, err := restarted.Request("model-1"); err != ErrIdempotencyRecovery {
+		t.Fatalf("legacy acquisition after unkeyed crash = %v", err)
+	}
+	if err := restarted.ManualStart(context.Background(), "model-1"); err != ErrIdempotencyRecovery {
+		t.Fatalf("manual start after unkeyed crash = %v", err)
+	}
+}
+
+func TestIdempotencyPreparingCancellationExpirationFailureAndShutdown(t *testing.T) {
+	t.Run("preparing replay", func(t *testing.T) {
+		_, s := testScheduler(t, "delay", 1, time.Second, time.Second, 5, 2*time.Second, 100*time.Millisecond)
+		key := "5ef8d7ef-b335-4404-b72c-5b2c08a36104"
+		first, _, err := s.RequestIdempotent(key, "model-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		waitLease(t, s, first.ID, Preparing)
+		replay, repeated, err := s.RequestIdempotent(key, "model-1")
+		if err != nil || !repeated || replay.ID != first.ID || replay.State != Preparing {
+			t.Fatalf("preparing replay = %+v repeated=%v err=%v", replay, repeated, err)
+		}
+		waitLease(t, s, first.ID, Active)
+		if starts := countProcessEvent(t, "START"); starts > 1 {
+			t.Fatalf("retry started another backend: START count=%d", starts)
+		}
+	})
+
+	t.Run("cancelled queued operation", func(t *testing.T) {
+		_, s := testScheduler(t, "normal", 1, time.Second, time.Second, 5, time.Second, 100*time.Millisecond)
+		active, _ := s.Request("model-1")
+		waitLease(t, s, active.ID, Active)
+		key := "6ef8d7ef-b335-4404-b72c-5b2c08a36105"
+		queued, _, err := s.RequestIdempotent(key, "model-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.Release(queued.ID); err != nil {
+			t.Fatal(err)
+		}
+		got, replay, err := s.RequestIdempotent(key, "model-1")
+		if err != ErrIdempotencyTerminal || !replay || got.State != Cancelled {
+			t.Fatalf("cancelled replay = %+v replay=%v err=%v", got, replay, err)
+		}
+	})
+
+	t.Run("cancel races retry", func(t *testing.T) {
+		_, s := testScheduler(t, "normal", 1, time.Second, time.Second, 5, time.Second, 100*time.Millisecond)
+		hold, _ := s.Request("model-1")
+		waitLease(t, s, hold.ID, Active)
+		key := "a1f8d7ef-b335-4404-b72c-5b2c08a36113"
+		queued, _, err := s.RequestIdempotent(key, "model-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); <-start; _, _ = s.Release(queued.ID) }()
+		var replay LeaseStatus
+		var replayErr error
+		go func() { defer wg.Done(); <-start; replay, _, replayErr = s.RequestIdempotent(key, "model-1") }()
+		close(start)
+		wg.Wait()
+		if replay.ID != queued.ID || (replay.State != Queued && replay.State != Cancelled) || (replayErr != nil && replayErr != ErrIdempotencyTerminal) {
+			t.Fatalf("cancel/retry race returned another result: %+v err=%v", replay, replayErr)
+		}
+		got, repeated, err := s.RequestIdempotent(key, "model-1")
+		if err != ErrIdempotencyTerminal || !repeated || got.ID != queued.ID || got.State != Cancelled {
+			t.Fatalf("post-race retry = %+v repeated=%v err=%v", got, repeated, err)
+		}
+	})
+
+	t.Run("expired operation", func(t *testing.T) {
+		_, s := testScheduler(t, "normal", 1, time.Second, time.Second, 5, 80*time.Millisecond, 20*time.Millisecond)
+		key := "7ef8d7ef-b335-4404-b72c-5b2c08a36106"
+		first, _, err := s.RequestIdempotent(key, "model-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		waitLease(t, s, first.ID, Expired)
+		got, replay, err := s.RequestIdempotent(key, "model-1")
+		if err != ErrIdempotencyTerminal || !replay || got.State != Expired {
+			t.Fatalf("expired replay = %+v replay=%v err=%v", got, replay, err)
+		}
+	})
+
+	t.Run("failed operation", func(t *testing.T) {
+		_, s := testScheduler(t, "die", 1, time.Second, time.Second, 5, time.Second, 100*time.Millisecond)
+		key := "8ef8d7ef-b335-4404-b72c-5b2c08a36107"
+		first, _, err := s.RequestIdempotent(key, "model-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		waitLease(t, s, first.ID, Failed)
+		got, replay, err := s.RequestIdempotent(key, "model-1")
+		if err != ErrIdempotencyTerminal || !replay || got.State != Failed {
+			t.Fatalf("failed replay = %+v replay=%v err=%v", got, replay, err)
+		}
+	})
+
+	t.Run("shutdown operation", func(t *testing.T) {
+		_, s := testScheduler(t, "normal", 1, time.Second, time.Second, 5, time.Second, 100*time.Millisecond)
+		key := "9ef8d7ef-b335-4404-b72c-5b2c08a36108"
+		first, _, err := s.RequestIdempotent(key, "model-1")
+		if err != nil {
+			t.Fatal(err)
+		}
+		waitLease(t, s, first.ID, Active)
+		endInference, err := s.BeginInference(first.ID, first.Model, func() {})
+		if err != nil {
+			t.Fatal(err)
+		}
+		shutdown := make(chan error, 1)
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			shutdown <- s.Shutdown(ctx)
+		}()
+		deadline := time.Now().Add(time.Second)
+		for time.Now().Before(deadline) {
+			s.mu.Lock()
+			closing := s.closing
+			s.mu.Unlock()
+			if closing {
+				break
+			}
+			time.Sleep(time.Millisecond)
+		}
+		got, replay, err := s.RequestIdempotent(key, "model-1")
+		if err != ErrIdempotencyTerminal || !replay || got.ID != first.ID || got.State != Cancelled {
+			t.Fatalf("shutdown replay = %+v replay=%v err=%v", got, replay, err)
+		}
+		endInference()
+		if err := <-shutdown; err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+func countProcessEvent(t *testing.T, event string) int {
+	t.Helper()
+	count := 0
+	for _, line := range readEvents(t) {
+		if strings.HasPrefix(line, event+" ") {
+			count++
+		}
+	}
+	return count
+}
+
+func shutdownScheduler(t *testing.T, s *Scheduler) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := s.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestNeverRunsTwoModelProcessesAtOnce(t *testing.T) {
 	_, s := testScheduler(t, "normal", 2, time.Second, time.Second, 3, time.Second, time.Second)
 	first, _ := s.Request("model-1")
@@ -307,7 +681,44 @@ func TestNeverRunsTwoModelProcessesAtOnce(t *testing.T) {
 	}
 }
 
+type testReleaseProtector struct{ protected atomic.Bool }
+
+func (p *testReleaseProtector) Protected(string, string, string) (bool, string) {
+	if p.protected.Load() {
+		return true, "fixture protection"
+	}
+	return false, ""
+}
+
+func TestProtectedLeaseCannotReleaseOrExpire(t *testing.T) {
+	_, s := testScheduler(t, "normal", 1, time.Second, time.Second, 2, 60*time.Millisecond, 10*time.Millisecond)
+	lease, err := s.Request("model-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitLease(t, s, lease.ID, Active)
+	protector := &testReleaseProtector{}
+	protector.protected.Store(true)
+	s.SetReleaseProtector(protector)
+	time.Sleep(120 * time.Millisecond)
+	if got, _ := s.Get(lease.ID); got.State != Active {
+		t.Fatalf("protected lease expired: %+v", got)
+	}
+	if _, err := s.Release(lease.ID); !errors.Is(err, ErrInferenceProtected) {
+		t.Fatalf("protected release error = %v", err)
+	}
+	protector.protected.Store(false)
+	if _, err := s.Release(lease.ID); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func testScheduler(t *testing.T, mode string, modelsCount int, startup, shutdown time.Duration, queueSize int, ttl, heartbeat time.Duration) (*runtime.Manager, *Scheduler) {
+	m, s, _ := testSchedulerWithStore(t, mode, modelsCount, startup, shutdown, queueSize, ttl, heartbeat, false)
+	return m, s
+}
+
+func testSchedulerWithStore(t *testing.T, mode string, modelsCount int, startup, shutdown time.Duration, queueSize int, ttl, heartbeat time.Duration, persistent bool) (*runtime.Manager, *Scheduler, string) {
 	t.Helper()
 	dir := t.TempDir()
 	ports := make([]int, modelsCount)
@@ -337,14 +748,25 @@ func testScheduler(t *testing.T, mode string, modelsCount int, startup, shutdown
 	}
 	cfg := config.Config{Runtime: config.RuntimeConfig{Backend: "llamacpp", Binary: binary, StartupTimeout: startup.String(), ShutdownTimeout: shutdown.String()}, Models: configured}
 	manager := runtime.NewManager(cfg)
-	sched := New(manager, config.SchedulerConfig{MaxQueueSize: queueSize, LeaseTTL: ttl.String(), Heartbeat: heartbeat.String(), MaxLease: (10 * ttl).String()})
+	schedulerCfg := config.SchedulerConfig{MaxQueueSize: queueSize, LeaseTTL: ttl.String(), Heartbeat: heartbeat.String(), MaxLease: (10 * ttl).String()}
+	store := ""
+	var sched *Scheduler
+	if persistent {
+		store = filepath.Join(dir, "idempotency.json")
+		sched, err = NewWithIdempotencyStore(manager, schedulerCfg, store)
+		if err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		sched = New(manager, schedulerCfg)
+	}
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		_ = sched.Shutdown(ctx)
 		_ = manager.Shutdown(ctx)
 	})
-	return manager, sched
+	return manager, sched, store
 }
 
 func readEvents(t *testing.T) []string {
@@ -358,6 +780,12 @@ func readEvents(t *testing.T) []string {
 		return nil
 	}
 	return strings.FieldsFunc(strings.TrimSpace(string(data)), func(r rune) bool { return r == '\n' })
+}
+
+func setIdempotencyPath(s *Scheduler, path string) {
+	s.mu.Lock()
+	s.idempotencyPath = path
+	s.mu.Unlock()
 }
 
 func waitLease(t *testing.T, s *Scheduler, id string, state LeaseState) LeaseStatus {

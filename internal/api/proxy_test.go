@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,8 @@ import (
 	"time"
 
 	"local-ai-runtime/internal/config"
+	"local-ai-runtime/internal/corecontract"
+	"local-ai-runtime/internal/inference"
 	"local-ai-runtime/internal/scheduler"
 )
 
@@ -64,6 +67,46 @@ func TestOpenAIModelsChatAndEmbeddings(t *testing.T) {
 	waitForAPI(t, func() bool { return manager.Status().PID == 0 })
 }
 
+func TestInferenceRequestIDCollisionAndReadOnlyObservability(t *testing.T) {
+	manager, sched := apiTestScheduler(t)
+	registry := inference.New(inference.Options{})
+	server := httptest.NewServer(NewHandlerWithConfigAndRegistry(manager, sched, config.ProxyConfig{}, registry))
+	defer server.Close()
+	id, _ := corecontract.NewID()
+	request, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/chat/completions", strings.NewReader(`{"model":"model-1","messages":[{"role":"user","content":"secret"}]}`))
+	request.Header.Set("X-LARM-Request-ID", id)
+	response, err := server.Client().Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusOK || response.Header.Get("X-LARM-Request-ID") != id {
+		t.Fatalf("request identity: status=%d header=%q", response.StatusCode, response.Header.Get("X-LARM-Request-ID"))
+	}
+
+	// The second attempt needs the same explicit header to exercise collision.
+	request, _ = http.NewRequest(http.MethodPost, server.URL+"/v1/chat/completions", strings.NewReader(`{"model":"model-1"}`))
+	request.Header.Set("X-LARM-Request-ID", id)
+	response, err = server.Client().Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusConflict {
+		t.Fatalf("collision status = %d", response.StatusCode)
+	}
+
+	detail, err := server.Client().Get(server.URL + "/api/v1/inferences/" + id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(detail.Body)
+	_ = detail.Body.Close()
+	if detail.StatusCode != http.StatusOK || strings.Contains(string(body), "secret") || strings.Contains(string(body), "messages") {
+		t.Fatalf("unsafe observability response: %s", body)
+	}
+}
+
 func TestChatStreamingSSEPreserved(t *testing.T) {
 	manager, sched := apiTestScheduler(t)
 	server := httptest.NewServer(NewHandler(manager, sched))
@@ -77,6 +120,39 @@ func TestChatStreamingSSEPreserved(t *testing.T) {
 	text := string(body)
 	if response.StatusCode != http.StatusOK || !strings.HasPrefix(response.Header.Get("Content-Type"), "text/event-stream") || !strings.Contains(text, `"content":"one"`) || !strings.Contains(text, "data: [DONE]\n\n") {
 		t.Fatalf("SSE response: status=%d headers=%v body=%q", response.StatusCode, response.Header, text)
+	}
+}
+
+func TestTruncatedSSEIsFailedAndReleasesAutomaticLease(t *testing.T) {
+	t.Setenv("LARM_API_BACKEND_MODE", "truncated")
+	manager, sched := apiTestScheduler(t)
+	server := httptest.NewServer(NewHandler(manager, sched))
+	defer server.Close()
+	response := postJSON(t, server, "/v1/chat/completions", `{"model":"model-1","stream":true}`, "")
+	body, err := io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK || strings.Contains(string(body), "[DONE]") {
+		t.Fatalf("truncated SSE response: status=%d body=%q", response.StatusCode, body)
+	}
+	waitForAPI(t, func() bool { return manager.Status().PID == 0 })
+	statusResponse, err := server.Client().Get(server.URL + "/api/v1/status")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var status struct {
+		Completed uint64 `json:"completed_requests"`
+		Failed    uint64 `json:"failed_requests"`
+		Unknown   uint64 `json:"unknown_requests"`
+	}
+	if err := json.NewDecoder(statusResponse.Body).Decode(&status); err != nil {
+		t.Fatal(err)
+	}
+	_ = statusResponse.Body.Close()
+	if status.Completed != 0 || status.Failed != 1 || status.Unknown != 0 {
+		t.Fatalf("truncated counters: %+v", status)
 	}
 }
 
@@ -177,6 +253,43 @@ func TestStreamingDisconnectAndBackendErrors(t *testing.T) {
 	}
 }
 
+func TestDownstreamDisconnectKeepsInferenceAmbiguous(t *testing.T) {
+	t.Setenv("LARM_API_BACKEND_MODE", "hangstream")
+	manager, sched := apiTestScheduler(t)
+	registry := inference.New(inference.Options{})
+	server := httptest.NewServer(NewHandlerWithConfigAndRegistry(manager, sched, config.ProxyConfig{}, registry))
+	defer server.Close()
+	lease, err := sched.Request("model-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitActiveAPI(t, sched, lease.ID)
+	requestID, err := corecontract.NewID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	request, _ := http.NewRequestWithContext(ctx, http.MethodPost, server.URL+"/v1/chat/completions", strings.NewReader(`{"model":"model-1","stream":true}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-LARM-Request-ID", requestID)
+	request.Header.Set("X-LARM-Lease-ID", lease.ID)
+	response, err := server.Client().Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = response.Body.Read(make([]byte, 1))
+	cancel()
+	_ = response.Body.Close()
+	waitForAPI(t, func() bool {
+		snapshot, getErr := registry.Get(requestID)
+		return getErr == nil && snapshot.IsAmbiguous() && snapshot.Cancellation == corecontract.CancelUnknown && snapshot.SSE != nil && snapshot.SSE.ClientDisconnected
+	})
+	if _, err := sched.Release(lease.ID); !errors.Is(err, scheduler.ErrInferenceProtected) {
+		t.Fatalf("downstream disconnect released lease: %v", err)
+	}
+}
+
 func TestInferenceTimeoutAndLeaseExpiryDoNotInterruptAdmittedWork(t *testing.T) {
 	t.Setenv("LARM_API_BACKEND_MODE", "slow")
 	manager, sched := apiTestScheduler(t)
@@ -241,8 +354,8 @@ func TestReleasedExternalLeaseKeepsBackendUntilAdmittedInferenceEnds(t *testing.
 	result := make(chan int, 1)
 	go func() { result <- doPostStatus(server, "/v1/chat/completions", `{"model":"model-1"}`, lease.ID) }()
 	waitForAPI(t, func() bool { return sched.ActiveInferenceCount() == 1 })
-	if _, err := sched.Release(lease.ID); err != nil {
-		t.Fatal(err)
+	if _, err := sched.Release(lease.ID); !errors.Is(err, scheduler.ErrInferenceProtected) {
+		t.Fatalf("manual release while inference is active: %v", err)
 	}
 	next, err := sched.Request("model-2")
 	if err != nil {
@@ -254,6 +367,9 @@ func TestReleasedExternalLeaseKeepsBackendUntilAdmittedInferenceEnds(t *testing.
 	}
 	if code := <-result; code != http.StatusOK {
 		t.Fatalf("inference status = %d", code)
+	}
+	if _, err := sched.Release(lease.ID); err != nil {
+		t.Fatalf("release after terminal inference: %v", err)
 	}
 	waitActiveAPI(t, sched, next.ID)
 	if manager.Status().ActiveModel != "model-2" {
