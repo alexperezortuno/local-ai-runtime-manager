@@ -429,7 +429,7 @@ func writeInferenceSchedulerError(w http.ResponseWriter, err error) {
 		status = http.StatusNotFound
 	case errors.Is(err, scheduler.ErrQueueFull):
 		status = http.StatusTooManyRequests
-	case errors.Is(err, scheduler.ErrConflict), errors.Is(err, scheduler.ErrExpired), errors.Is(err, scheduler.ErrInferenceProtected):
+	case errors.Is(err, scheduler.ErrConflict), errors.Is(err, scheduler.ErrExpired), errors.Is(err, scheduler.ErrInferenceProtected), errors.Is(err, scheduler.ErrCapacity):
 		status = http.StatusConflict
 	case errors.Is(err, scheduler.ErrClosed), errors.Is(err, runtime.ErrUnavailable):
 		status = http.StatusServiceUnavailable
