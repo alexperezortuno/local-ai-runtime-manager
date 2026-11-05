@@ -7,3 +7,6 @@ skills-lock.json
 .vscode
 .idea
 .DS_Store
+evidence/*
+configs/*
+!configs/models.example.yaml
