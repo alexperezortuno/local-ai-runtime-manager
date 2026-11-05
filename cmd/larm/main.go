@@ -1,3 +1,5 @@
+//go:build !larmtest
+
 package main
 
 import (
@@ -12,13 +14,19 @@ import (
 	"syscall"
 	"time"
 
+	"local-ai-runtime/internal/adminauth"
+	"local-ai-runtime/internal/admincli"
 	"local-ai-runtime/internal/api"
 	"local-ai-runtime/internal/config"
+	"local-ai-runtime/internal/inference"
 	runtime "local-ai-runtime/internal/runtime"
 	"local-ai-runtime/internal/scheduler"
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "admin" {
+		os.Exit(admincli.Run(os.Args[2:], os.Stdout, os.Stderr))
+	}
 	defaultConfig := os.Getenv("LARM_CONFIG")
 	if defaultConfig == "" {
 		defaultConfig = "configs/models.yaml"
@@ -29,12 +37,34 @@ func main() {
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
-	manager := runtime.NewManager(cfg)
-	sched := scheduler.New(manager, cfg.Scheduler)
+	journal, err := inference.OpenJournal(inference.JournalOptions{Path: cfg.Recovery.JournalPath, Durability: cfg.Recovery.Durability, MaxRecords: cfg.Recovery.MaxRecords})
+	if err != nil {
+		log.Fatalf("open inference recovery journal: %v", err)
+	}
+	manager := runtime.NewManager(cfg, journal)
+	sched, err := scheduler.NewWithIdempotencyStore(manager, cfg.Scheduler, cfg.Scheduler.IdempotencyStore)
+	if err != nil {
+		log.Fatalf("open lease idempotency store: %v", err)
+	}
+	handler, registry, recoveryService, err := api.NewHandlerWithJournalAndRecovery(manager, sched, cfg.Proxy, journal)
+	if err != nil {
+		log.Fatalf("open inference recovery state: %v", err)
+	}
 	server := &http.Server{
 		Addr:              net.JoinHostPort(cfg.Server.Host, strconv.Itoa(cfg.Server.Port)),
-		Handler:           api.NewHandlerWithConfig(manager, sched, cfg.Proxy),
+		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
+	}
+	var adminServer *adminauth.Server
+	if cfg.Admin.Enabled {
+		adminServer, err = adminauth.NewServer(cfg.Admin, registry.RecoveryStatus().LARMInstanceID, recoveryService)
+		if err != nil {
+			log.Fatalf("configure administrative authentication: %v", err)
+		}
+		if err := adminServer.Listen(); err != nil {
+			log.Fatalf("listen administrative socket: %v", err)
+		}
+		defer adminServer.Close()
 	}
 	serveErr := make(chan error, 1)
 	go func() {
@@ -55,6 +85,11 @@ func main() {
 		if err := server.Shutdown(shutdownCtx); err != nil {
 			log.Printf("HTTP shutdown: %v", err)
 		}
+		if adminServer != nil {
+			if err := adminServer.Close(); err != nil {
+				log.Printf("administrative socket shutdown: %v", err)
+			}
+		}
 		if err := sched.Shutdown(shutdownCtx); err != nil {
 			log.Printf("scheduler shutdown: %v", err)
 			// Never stop llama-server while an admitted backend request still owns it.
@@ -65,6 +100,9 @@ func main() {
 		}
 		if err := manager.Shutdown(shutdownCtx); err != nil {
 			log.Printf("runtime shutdown: %v", err)
+		}
+		if err := registry.MarkCleanShutdown(); err != nil {
+			log.Printf("persist inference recovery shutdown: %v", err)
 		}
 	}
 }
