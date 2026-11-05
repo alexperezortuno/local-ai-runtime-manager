@@ -103,15 +103,16 @@ func (m *Manager) SetMaxActiveModels(n int) {
 	m.mu.Unlock()
 }
 
+func (m *Manager) Capacity() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.capacity
+}
+
 func (m *Manager) residentCountLocked() int {
 	count := 0
-	for id, p := range m.procs {
-		if p != nil || m.modelStates[id] == Starting || m.modelStates[id] == Stopping {
-			count++
-		}
-	}
 	for id, state := range m.modelStates {
-		if m.procs[id] == nil && state == Starting {
+		if m.procs[id] != nil || state == Starting || state == Stopping {
 			count++
 		}
 	}
@@ -832,7 +833,10 @@ func (m *Manager) Models() map[string]ModelStatus {
 		if m.recovery && state == Stopped {
 			state = RecoveryRequired
 		}
-		status := ModelStatus{ID: id, Path: model.Path, Port: model.Port, State: state, KeepAlive: model.KeepAlive, TimeAlive: model.TimeAlive}
+		status := ModelStatus{ID: id, Path: model.Path, Port: model.Port, State: state, KeepAlive: model.KeepAlive, TimeAlive: model.TimeAlive, RecoveryState: "NORMAL", PreloadState: "NOT_REQUIRED"}
+		if m.recovery {
+			status.RecoveryState = "RECOVERY_REQUIRED"
+		}
 		if p := m.procs[id]; p != nil {
 			status.PID = p.identity.PID
 			status.ProcessInstanceID = p.instanceID
@@ -840,22 +844,38 @@ func (m *Manager) Models() map[string]ModelStatus {
 			if model.KeepAlive {
 				status.Residency = "READY_PERSISTENT"
 			}
+			if instance, ok := m.modelProcessLocked(id); ok {
+				status.OwnershipStatus = instance.OwnershipStatus
+				status.ProcessIdentityStatus = instance.ProcessIdentityStatus
+				status.TerminationStatus = instance.TerminationStatus
+			}
 		}
+		status.CapacityOccupied = status.PID != 0 || state == Starting || state == Stopping
 		result[id] = status
 	}
 	return result
 }
 
 type ModelStatus struct {
-	ID                string `json:"id"`
-	Path              string `json:"path"`
-	Port              int    `json:"port"`
-	State             State  `json:"state"`
-	PID               int    `json:"pid,omitempty"`
-	ProcessInstanceID string `json:"process_instance_id,omitempty"`
-	KeepAlive         bool   `json:"keep_alive"`
-	TimeAlive         string `json:"time_alive"`
-	Residency         string `json:"residency,omitempty"`
+	ID                    string `json:"id"`
+	Path                  string `json:"-"`
+	Port                  int    `json:"port"`
+	State                 State  `json:"state"`
+	PID                   int    `json:"pid,omitempty"`
+	ProcessInstanceID     string `json:"process_instance_id,omitempty"`
+	KeepAlive             bool   `json:"keep_alive"`
+	TimeAlive             string `json:"time_alive"`
+	Residency             string `json:"residency,omitempty"`
+	ActiveLeases          int    `json:"active_leases"`
+	ProtectedInference    bool   `json:"protected_inference"`
+	ResidenceRemaining    string `json:"residence_remaining,omitempty"`
+	CapacityOccupied      bool   `json:"capacity_occupied"`
+	RecoveryState         string `json:"recovery_state"`
+	OwnershipStatus       string `json:"ownership_status,omitempty"`
+	ProcessIdentityStatus string `json:"process_identity_status,omitempty"`
+	TerminationStatus     string `json:"termination_status,omitempty"`
+	PreloadState          string `json:"preload_state,omitempty"`
+	PreloadError          string `json:"preload_error,omitempty"`
 }
 
 func (m *Manager) Shutdown(ctx context.Context) error {
