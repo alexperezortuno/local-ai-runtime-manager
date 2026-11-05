@@ -156,6 +156,7 @@ type AuditEvent struct {
 	EventID                string    `json:"event_id"`
 	IncidentID             string    `json:"incident_id"`
 	PlanID                 string    `json:"plan_id,omitempty"`
+	ModelID                string    `json:"model_id,omitempty"`
 	Timestamp              time.Time `json:"timestamp"`
 	Actor                  string    `json:"actor"`
 	OperatorIdentity       string    `json:"operator_identity,omitempty"`
