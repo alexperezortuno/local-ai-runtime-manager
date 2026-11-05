@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -26,6 +27,14 @@ import (
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "admin" {
 		os.Exit(admincli.Run(os.Args[2:], os.Stdout, os.Stderr))
+	}
+	if index := readOnlyCommandIndex(os.Args[1:]); index >= 0 {
+		original := os.Args[1:]
+		command := original[index]
+		args := append([]string(nil), original[:index]...)
+		args = append(args, original[index+1:]...)
+		args = append(args, command)
+		os.Exit(admincli.RunReadOnly(args, os.Stdout, os.Stderr))
 	}
 	defaultConfig := os.Getenv("LARM_CONFIG")
 	if defaultConfig == "" {
@@ -50,6 +59,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("open inference recovery state: %v", err)
 	}
+	// Recovery and the Scheduler admission gate are installed by the handler
+	// construction before any configured residency load is admitted.
+	if err := sched.Preload(); err != nil {
+		log.Printf("model preloading unavailable: %v", err)
+	}
 	server := &http.Server{
 		Addr:              net.JoinHostPort(cfg.Server.Host, strconv.Itoa(cfg.Server.Port)),
 		Handler:           handler,
@@ -61,6 +75,7 @@ func main() {
 		if err != nil {
 			log.Fatalf("configure administrative authentication: %v", err)
 		}
+		adminServer.SetModelStopper(sched)
 		if err := adminServer.Listen(); err != nil {
 			log.Fatalf("listen administrative socket: %v", err)
 		}
@@ -104,5 +119,31 @@ func main() {
 		if err := registry.MarkCleanShutdown(); err != nil {
 			log.Printf("persist inference recovery shutdown: %v", err)
 		}
+	}
+}
+
+func readOnlyCommandIndex(args []string) int {
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		if strings.HasPrefix(arg, "-") {
+			if !strings.Contains(arg, "=") && index+1 < len(args) {
+				index++
+			}
+			continue
+		}
+		if isReadOnlyCommand(arg) {
+			return index
+		}
+		return -1
+	}
+	return -1
+}
+
+func isReadOnlyCommand(command string) bool {
+	switch command {
+	case "models", "status", "queue", "doctor":
+		return true
+	default:
+		return false
 	}
 }
