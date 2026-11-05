@@ -10,3 +10,4 @@ skills-lock.json
 evidence/*
 configs/*
 !configs/models.example.yaml
+larm
