@@ -5,6 +5,7 @@ import (
 	"math"
 	"net"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"time"
@@ -15,22 +16,44 @@ type Config struct {
 	Runtime   RuntimeConfig          `yaml:"runtime"`
 	Scheduler SchedulerConfig        `yaml:"scheduler"`
 	Proxy     ProxyConfig            `yaml:"proxy"`
+	Recovery  RecoveryConfig         `yaml:"recovery"`
+	Admin     AdminConfig            `yaml:"admin"`
 	Models    map[string]ModelConfig `yaml:"models"`
 }
 
 type ProxyConfig struct {
-	QueueWaitTimeout  string `yaml:"queue_wait_timeout"`
-	InferenceTimeout  string `yaml:"inference_timeout"`
-	ConnectTimeout    string `yaml:"backend_connect_timeout"`
-	StreamIdleTimeout string `yaml:"stream_idle_timeout"`
+	QueueWaitTimeout            string `yaml:"queue_wait_timeout"`
+	InferenceTimeout            string `yaml:"inference_timeout"`
+	ConnectTimeout              string `yaml:"backend_connect_timeout"`
+	StreamIdleTimeout           string `yaml:"stream_idle_timeout"`
+	InferenceMaxTerminalRecords int    `yaml:"inference_max_terminal_records"`
 }
 
 type SchedulerConfig struct {
-	MaxActiveModels int    `yaml:"max_active_models"`
-	MaxQueueSize    int    `yaml:"max_queue_size"`
-	LeaseTTL        string `yaml:"lease_ttl"`
-	Heartbeat       string `yaml:"heartbeat_interval"`
-	MaxLease        string `yaml:"max_lease_duration"`
+	MaxActiveModels  int    `yaml:"max_active_models"`
+	MaxQueueSize     int    `yaml:"max_queue_size"`
+	LeaseTTL         string `yaml:"lease_ttl"`
+	Heartbeat        string `yaml:"heartbeat_interval"`
+	MaxLease         string `yaml:"max_lease_duration"`
+	IdempotencyStore string `yaml:"idempotency_store"`
+}
+
+type RecoveryConfig struct {
+	JournalPath string `yaml:"journal_path"`
+	Durability  string `yaml:"durability"`
+	MaxRecords  int    `yaml:"max_records"`
+}
+
+// AdminConfig is deliberately disabled unless enabled is explicitly set.
+// Private signing keys are not a LARM configuration value; the external
+// administrative client owns them.
+type AdminConfig struct {
+	Enabled       bool   `yaml:"enabled"`
+	SocketPath    string `yaml:"socket_path"`
+	PublicKeyPath string `yaml:"public_key_path"`
+	AllowedUID    *int   `yaml:"allowed_uid"`
+	Audience      string `yaml:"audience"`
+	CapabilityTTL string `yaml:"capability_ttl"`
 }
 
 type ServerConfig struct {
@@ -46,6 +69,7 @@ type RuntimeConfig struct {
 }
 
 type ModelConfig struct {
+	Alias       string   `yaml:"alias"`
 	Path        string   `yaml:"path"`
 	Port        int      `yaml:"port"`
 	Context     int      `yaml:"context"`
@@ -58,8 +82,16 @@ type ModelConfig struct {
 	Temperature float64  `yaml:"temperature"`
 	TopP        float64  `yaml:"top_p"`
 	TopK        int      `yaml:"top_k"`
+	LogFile     string   `yaml:"log_file"`
 	Reasoning   string   `yaml:"reasoning"`
 	ExtraArgs   []string `yaml:"extra_args"`
+	KeepAlive   bool     `yaml:"keep_alive"`
+	TimeAlive   string   `yaml:"time_alive"`
+}
+
+func (m ModelConfig) TimeAliveDuration() time.Duration {
+	d, _ := time.ParseDuration(m.TimeAlive)
+	return d
 }
 
 var modelIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
@@ -77,6 +109,51 @@ func (c *Config) Validate() error {
 	if c.Proxy.StreamIdleTimeout == "" {
 		c.Proxy.StreamIdleTimeout = "2m"
 	}
+	if c.Proxy.InferenceMaxTerminalRecords == 0 {
+		c.Proxy.InferenceMaxTerminalRecords = 1000
+	}
+	if c.Proxy.InferenceMaxTerminalRecords < 1 {
+		return fmt.Errorf("proxy.inference_max_terminal_records must be positive")
+	}
+	if c.Recovery.JournalPath == "" {
+		c.Recovery.JournalPath = "larm-recovery.json"
+	}
+	if c.Recovery.Durability == "" {
+		c.Recovery.Durability = "sync"
+	}
+	if c.Recovery.Durability != "sync" {
+		return fmt.Errorf("recovery.durability must be sync")
+	}
+	if c.Recovery.MaxRecords == 0 {
+		c.Recovery.MaxRecords = 10000
+	}
+	if c.Recovery.MaxRecords < 1 {
+		return fmt.Errorf("recovery.max_records must be positive")
+	}
+	if c.Admin.Enabled {
+		if c.Admin.SocketPath == "" {
+			c.Admin.SocketPath = filepath.Join(filepath.Dir(c.Recovery.JournalPath), "admin.sock")
+		}
+		if !filepath.IsAbs(c.Admin.SocketPath) {
+			return fmt.Errorf("admin.socket_path must be absolute when admin is enabled")
+		}
+		if c.Admin.PublicKeyPath == "" {
+			return fmt.Errorf("admin.public_key_path is required when admin is enabled")
+		}
+		if c.Admin.AllowedUID == nil || *c.Admin.AllowedUID < 0 {
+			return fmt.Errorf("admin.allowed_uid is required and must be non-negative when admin is enabled")
+		}
+		if c.Admin.Audience == "" {
+			c.Admin.Audience = "larm-admin"
+		}
+		if c.Admin.CapabilityTTL == "" {
+			c.Admin.CapabilityTTL = "5m"
+		}
+		ttl, err := time.ParseDuration(c.Admin.CapabilityTTL)
+		if err != nil || ttl <= 0 || ttl > 15*time.Minute {
+			return fmt.Errorf("admin.capability_ttl must be positive and at most 15m")
+		}
+	}
 	for name, value := range map[string]string{"queue_wait_timeout": c.Proxy.QueueWaitTimeout, "inference_timeout": c.Proxy.InferenceTimeout, "backend_connect_timeout": c.Proxy.ConnectTimeout, "stream_idle_timeout": c.Proxy.StreamIdleTimeout} {
 		d, err := time.ParseDuration(value)
 		if err != nil || d <= 0 {
@@ -86,8 +163,8 @@ func (c *Config) Validate() error {
 	if c.Scheduler.MaxActiveModels == 0 {
 		c.Scheduler.MaxActiveModels = 1
 	}
-	if c.Scheduler.MaxActiveModels != 1 {
-		return fmt.Errorf("scheduler.max_active_models must be 1")
+	if c.Scheduler.MaxActiveModels < 1 {
+		return fmt.Errorf("scheduler.max_active_models must be positive")
 	}
 	if c.Scheduler.MaxQueueSize == 0 {
 		c.Scheduler.MaxQueueSize = 100
@@ -196,6 +273,14 @@ func (c *Config) Validate() error {
 			if err != nil || layers < 0 {
 				return fmt.Errorf("models.%s.gpu_layers must be a non-negative integer or all", id)
 			}
+		}
+		if model.TimeAlive == "" {
+			model.TimeAlive = "0s"
+			c.Models[id] = model
+		}
+		duration, err := time.ParseDuration(model.TimeAlive)
+		if err != nil || duration < 0 {
+			return fmt.Errorf("models.%s.time_alive must be a non-negative duration", id)
 		}
 	}
 	return nil
