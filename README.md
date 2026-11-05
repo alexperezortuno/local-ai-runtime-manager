@@ -83,6 +83,23 @@ scheduler:
 
 Al iniciar se validan el binario ejecutable, los archivos, los IDs, puertos y parámetros. Cada modelo necesita un puerto propio, distinto del puerto de la API.
 
+## CLI operativa
+
+Con LARM ejecutándose en la URL por defecto (`http://127.0.0.1:8090`), las
+consultas de uso diario son de solo lectura y reutilizan los snapshots de la
+API:
+
+```bash
+larm models       # estado, residencia, PID/ProcessInstanceID, leases y capacidad
+larm status       # servicio, modelos, residentes, capacidad, cola y Recovery
+larm queue        # FIFO, estado, lease_id y espera observada
+larm doctor       # validación read-only; no carga modelos ni ejecuta Recovery
+```
+
+Se puede indicar `-url URL` para las consultas y `-config PATH` para `doctor`.
+Un servicio detenido se informa como `WARN`, no como corrupción. `doctor` no
+crea archivos, claves ni capabilities.
+
 ## API
 
 ```bash
@@ -90,13 +107,32 @@ curl http://127.0.0.1:8090/health
 curl http://127.0.0.1:8090/api/v1/models
 curl http://127.0.0.1:8090/api/v1/status
 curl http://127.0.0.1:8090/api/v1/processes
-curl -X POST http://127.0.0.1:8090/api/v1/models/code-fast/start
-curl -X POST http://127.0.0.1:8090/api/v1/models/code-fast/stop
+curl -i -X POST http://127.0.0.1:8090/api/v1/models/code-fast/start # rechazado: requiere socket protegido
 ```
 
 Las operaciones de control esperan a que el backend esté listo o a que termine el apagado. Errores de modelo inexistente, conflicto y backend no disponible responden con `404`, `409` y `503`, respectivamente.
 
 `GET /api/v1/processes` y `GET /api/v1/processes/{process_instance_id}` son consultas read-only de identidad, ownership, grupo, evidencia y terminación. LARM no considera `SIGTERM`, `SIGKILL`, `Wait()` ni un puerto cerrado como prueba de terminación: si el grupo o descendientes no pueden verificarse, conserva `TERMINATION_UNKNOWN` y bloquea el cambio de modelo.
+
+`GET /api/v1/models` no devuelve el campo interno `path`: los clientes no
+privilegiados reciben sólo metadatos operativos y no necesitan conocer la ruta
+absoluta del GGUF. La configuración y Runtime conservan la ruta para cargar el
+modelo. La CLI operativa mantiene la misma salida sin rutas internas.
+
+### Administración autorizada
+
+La descarga administrativa no está disponible por HTTP. Requiere el socket Unix,
+peer credentials y una capability Ed25519 dirigida al modelo:
+
+```bash
+larm admin -socket "$LARM_ADMIN_SOCKET" -private-key "$LARM_ADMIN_PRIVATE_KEY" \
+  -out /tmp/code-agent.stop.cap auth issue-model-stop code-agent
+larm admin -socket "$LARM_ADMIN_SOCKET" \
+  -capability-file /tmp/code-agent.stop.cap model stop code-agent
+```
+
+El primer comando emite una capability y el segundo ejecuta el Stop verificado;
+la autorización conserva scope, expiración, replay y auditoría.
 
 ### Scheduler y reservas
 
@@ -132,7 +168,7 @@ Los endpoints manuales de LARM-001 se conservan y usan el mismo worker. Solo se 
 
 La configuración `scheduler` admite `max_active_models` (positivo), `max_queue_size` (por defecto `100`), `lease_ttl` (`10m`), `heartbeat_interval` (`30s`) y `max_lease_duration` (`2h`). Los tres tiempos deben ser positivos; heartbeat debe ser menor que TTL y la duración máxima al menos igual al TTL.
 
-Cada modelo admite `keep_alive` (por defecto `false`) y `time_alive` (por defecto `"0s"`). `keep_alive: true` mantiene el proceso cargado después de liberar la lease; no precarga el modelo y tiene precedencia sobre `time_alive`. Con `keep_alive: false`, `time_alive` retiene el proceso sólo durante ese período de inactividad. Las duraciones deben ser válidas para `time.Duration` y no negativas. Lease, residencia y Recovery son responsabilidades independientes.
+Cada modelo admite `keep_alive` (por defecto `false`) y `time_alive` (por defecto `"0s"`). `keep_alive: true` precarga el modelo automáticamente en segundo plano después de Recovery, mantiene el proceso cargado después de liberar la lease y tiene precedencia sobre `time_alive`. `time_alive > 0` también precarga y comienza la retención cuando el modelo queda READY y ocioso; al expirar no vuelve a precargar automáticamente. Un stop administrativo suprime la precarga hasta una nueva solicitud válida o un nuevo arranque. Con ambos valores por defecto se conserva la carga bajo demanda. Las duraciones deben ser válidas para `time.Duration` y no negativas. Lease, residencia y Recovery son responsabilidades independientes.
 
 Un fallo de arranque marca la lease `FAILED` y el worker continúa. Una caída inesperada también falla la lease activa; el siguiente trabajo se procesa sin adoptar procesos externos. Al apagar LARM, las leases activas y pendientes se marcan `CANCELLED`, se cancelan cargas e inferencias en curso y se detiene el backend después de que las referencias de inferencia finalicen.
 
@@ -172,6 +208,11 @@ La lease debe existir, estar activa y corresponder al modelo del JSON. El proxy 
 `proxy.queue_wait_timeout` (por defecto `5m`) solo limita la espera FIFO; `inference_timeout` (`10m`) limita cada inferencia; `backend_connect_timeout` (`5s`) limita la conexión al backend, y `stream_idle_timeout` (`2m`) limita el tiempo sin fragmentos SSE. Desconectar/cancelar una petición en cola elimina su lease automática; durante inferencia cancela el HTTP al backend y libera la referencia cuando este termina. El apagado cancela inferencias admitidas y espera su cierre antes de detener el proceso.
 
 `GET /api/v1/status` conserva el estado de runtime y scheduler y añade `queued_requests`, `active_inferences`, `completed_requests` y `failed_requests`. No registra ni conserva prompts o respuestas.
+
+Si `max_active_models` está ocupado por un residente persistente, una inferencia
+para otro modelo puede responder `409` con un diagnóstico como
+`model capacity exhausted: 1/1 resident slots occupied`; no se desaloja el
+residente automáticamente.
 
 El proxy reenvía las respuestas JSON y los eventos SSE de `llama-server`, incluidos campos presentes como `usage`, `finish_reason` y `tool_calls`; no implementa adaptaciones específicas por modelo.
 

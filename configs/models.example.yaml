@@ -52,7 +52,8 @@ models:
     top_k: 40
     reasoning: "off"
     keep_alive: false
-    time_alive: "10m"
+    # keep_alive/time_alive also request one automatic background preload at startup.
+     time_alive: "10m"
     extra_args:
       - "--jinja"
 
@@ -70,7 +71,8 @@ models:
     top_p: 0.85
     top_k: 40
     reasoning: "off"
-    keep_alive: true
+    # keep_alive has precedence and also requests automatic background preload.
+     keep_alive: true
     time_alive: "0s" # keep_alive takes precedence
     extra_args:
       - "--jinja"
