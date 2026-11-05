@@ -12,16 +12,20 @@ const (
 	Failed    LeaseState = "FAILED"
 	Cancelled LeaseState = "CANCELLED"
 	Expired   LeaseState = "EXPIRED"
+	// RecoveryRequired is an idempotency response state, not a scheduler transition.
+	RecoveryRequired LeaseState = "RECOVERY_REQUIRED"
 )
 
 type Lease struct {
-	ID          string     `json:"lease_id"`
-	Model       string     `json:"model"`
-	State       LeaseState `json:"state"`
-	CreatedAt   time.Time  `json:"created_at"`
-	ActivatedAt *time.Time `json:"activated_at,omitempty"`
-	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
-	Error       string     `json:"error,omitempty"`
+	ID               string     `json:"lease_id"`
+	Model            string     `json:"model"`
+	State            LeaseState `json:"state"`
+	CreatedAt        time.Time  `json:"created_at"`
+	ActivatedAt      *time.Time `json:"activated_at,omitempty"`
+	ExpiresAt        *time.Time `json:"expires_at,omitempty"`
+	Error            string     `json:"error,omitempty"`
+	Protected        bool       `json:"protected,omitempty"`
+	ProtectionReason string     `json:"protection_reason,omitempty"`
 }
 
 type LeaseStatus struct {
@@ -30,9 +34,37 @@ type LeaseStatus struct {
 }
 
 type Snapshot struct {
-	Active    *Lease  `json:"active,omitempty"`
-	Pending   []Lease `json:"pending"`
-	Preparing *Lease  `json:"preparing,omitempty"`
+	Active    *Lease     `json:"active,omitempty"`
+	Pending   []Lease    `json:"pending"`
+	Preparing *Lease     `json:"preparing,omitempty"`
+	Residents []Resident `json:"residents,omitempty"`
+}
+
+type Resident struct {
+	Model             string `json:"model"`
+	State             string `json:"state"`
+	Residency         string `json:"residency"`
+	KeepAlive         bool   `json:"keep_alive"`
+	TimeAlive         string `json:"time_alive"`
+	ProcessInstanceID string `json:"process_instance_id,omitempty"`
+	PID               int    `json:"pid,omitempty"`
+}
+
+// RecoveryRecord is the metadata retained by the LARM-005 idempotency store.
+// It is intentionally read-only: recovery never recreates a lease from it.
+type RecoveryRecord struct {
+	Key         string    `json:"key"`
+	Fingerprint string    `json:"fingerprint"`
+	Lease       Lease     `json:"lease"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+}
+
+type RecoveryDiagnostics struct {
+	StorePath       string           `json:"store_path,omitempty"`
+	CleanShutdown   bool             `json:"clean_shutdown"`
+	RecoveryBlocked bool             `json:"recovery_blocked"`
+	Records         []RecoveryRecord `json:"records"`
 }
 
 func cloneLease(l Lease) Lease {
