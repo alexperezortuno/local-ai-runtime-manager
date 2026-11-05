@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"sync"
 	"time"
 
@@ -13,38 +14,73 @@ import (
 )
 
 var (
-	ErrNotFound  = errors.New("lease or model not found")
-	ErrQueueFull = errors.New("scheduler queue is full")
-	ErrConflict  = errors.New("operation conflicts with scheduler state")
-	ErrExpired   = errors.New("lease has expired")
-	ErrClosed    = errors.New("scheduler is shutting down")
+	ErrNotFound              = errors.New("lease or model not found")
+	ErrQueueFull             = errors.New("scheduler queue is full")
+	ErrConflict              = errors.New("operation conflicts with scheduler state")
+	ErrExpired               = errors.New("lease has expired")
+	ErrClosed                = errors.New("scheduler is shutting down")
+	ErrInferenceProtected    = errors.New("lease is protected by an active or ambiguous inference")
+	ErrInvalidIdempotencyKey = errors.New("idempotency key must be a canonical UUID")
+	ErrIdempotencyConflict   = errors.New("idempotency key was used with different acquisition parameters")
+	ErrIdempotencyTerminal   = errors.New("idempotent acquisition is terminal")
+	ErrIdempotencyRecovery   = errors.New("idempotent acquisition cannot be recovered after restart")
 )
 
 type Scheduler struct {
-	mu              sync.Mutex
-	manager         *runtime.Manager
-	maxQueue        int
-	ttl             time.Duration
-	heartbeat       time.Duration
-	maxLease        time.Duration
-	leases          map[string]*Lease
-	queue           leaseQueue
-	activeID        string
-	preparingID     string
-	operationCancel context.CancelFunc
-	manual          []manualCommand
-	manualBusy      bool
-	manualModel     bool
-	unloadWhenIdle  bool
-	inferences      map[string]map[uint64]context.CancelFunc
-	nextInferenceID uint64
-	changed         chan struct{}
-	closing         bool
-	ctx             context.Context
-	cancel          context.CancelFunc
-	wake            chan struct{}
-	done            chan struct{}
-	closeOnce       sync.Once
+	mu               sync.Mutex
+	manager          *runtime.Manager
+	maxQueue         int
+	ttl              time.Duration
+	heartbeat        time.Duration
+	maxLease         time.Duration
+	leases           map[string]*Lease
+	queue            leaseQueue
+	activeID         string
+	preparingID      string
+	operationCancel  context.CancelFunc
+	manual           []manualCommand
+	manualBusy       bool
+	manualModel      bool
+	unloadWhenIdle   bool
+	unloadModel      string
+	residenceTimers  map[string]*time.Timer
+	residenceDue     map[string]bool
+	inferences       map[string]map[uint64]inferencePin
+	nextInferenceID  uint64
+	changed          chan struct{}
+	closing          bool
+	ctx              context.Context
+	cancel           context.CancelFunc
+	wake             chan struct{}
+	done             chan struct{}
+	closeOnce        sync.Once
+	idempotencyPath  string
+	idempotency      map[string]idempotencyRecord
+	reconciliations  map[string]reconciliationRecord
+	recoveryBlocked  bool
+	cleanShutdown    bool
+	releaseProtector ReleaseProtector
+	admissionGate    AdmissionGate
+	// idempotencyFault is a package-local test seam. Production never sets it;
+	// it lets persistence tests fail at an explicit durable-store boundary.
+	idempotencyFault func(string) error
+}
+
+// ReleaseProtector is consulted while the scheduler lock is held. It must
+// only inspect its own state and never call back into the scheduler.
+type ReleaseProtector interface {
+	Protected(leaseID, requestID, model string) (bool, string)
+}
+
+// AdmissionGate is a read-only Runtime Core guard. The scheduler remains the
+// only component that owns queue and lease transitions.
+type AdmissionGate interface {
+	AdmissionBlocked() bool
+}
+
+type inferencePin struct {
+	requestID string
+	cancel    context.CancelFunc
 }
 
 type manualCommand struct {
@@ -55,6 +91,25 @@ type manualCommand struct {
 }
 
 func New(manager *runtime.Manager, cfg config.SchedulerConfig) *Scheduler {
+	s := newScheduler(manager, cfg)
+	go s.worker()
+	return s
+}
+
+// NewWithIdempotencyStore enables durable acquisition-key records. A process
+// restart never restores leases or llama-server processes; unresolved records
+// become RECOVERY_REQUIRED and continue reserving their keys.
+func NewWithIdempotencyStore(manager *runtime.Manager, cfg config.SchedulerConfig, path string) (*Scheduler, error) {
+	s := newScheduler(manager, cfg)
+	if err := s.openIdempotencyStore(path); err != nil {
+		s.cancel()
+		return nil, err
+	}
+	go s.worker()
+	return s, nil
+}
+
+func newScheduler(manager *runtime.Manager, cfg config.SchedulerConfig) *Scheduler {
 	if cfg.MaxQueueSize <= 0 {
 		cfg.MaxQueueSize = 100
 	}
@@ -68,8 +123,10 @@ func New(manager *runtime.Manager, cfg config.SchedulerConfig) *Scheduler {
 		cfg.MaxLease = "2h"
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	s := &Scheduler{manager: manager, maxQueue: cfg.MaxQueueSize, ttl: cfg.LeaseTTLDuration(), heartbeat: cfg.HeartbeatDuration(), maxLease: cfg.MaxLeaseDuration(), leases: make(map[string]*Lease), inferences: make(map[string]map[uint64]context.CancelFunc), changed: make(chan struct{}), ctx: ctx, cancel: cancel, wake: make(chan struct{}, 1), done: make(chan struct{})}
-	go s.worker()
+	if manager != nil {
+		manager.SetMaxActiveModels(cfg.MaxActiveModels)
+	}
+	s := &Scheduler{manager: manager, maxQueue: cfg.MaxQueueSize, ttl: cfg.LeaseTTLDuration(), heartbeat: cfg.HeartbeatDuration(), maxLease: cfg.MaxLeaseDuration(), leases: make(map[string]*Lease), inferences: make(map[string]map[uint64]inferencePin), residenceTimers: make(map[string]*time.Timer), residenceDue: make(map[string]bool), changed: make(chan struct{}), ctx: ctx, cancel: cancel, wake: make(chan struct{}, 1), done: make(chan struct{}), idempotency: make(map[string]idempotencyRecord), reconciliations: make(map[string]reconciliationRecord)}
 	return s
 }
 
@@ -86,10 +143,23 @@ func (s *Scheduler) Request(model string) (Lease, error) {
 	if s.closing {
 		return Lease{}, ErrClosed
 	}
+	if s.recoveryBlocked {
+		return Lease{}, ErrIdempotencyRecovery
+	}
+	if blocked, _ := s.manager.RecoveryRequired(); blocked {
+		return Lease{}, ErrIdempotencyRecovery
+	}
+	if s.admissionGate != nil && s.admissionGate.AdmissionBlocked() {
+		return Lease{}, ErrIdempotencyRecovery
+	}
 	if len(s.queue) >= s.maxQueue {
 		return Lease{}, ErrQueueFull
 	}
+	if err := s.markDirtyLocked(); err != nil {
+		return Lease{}, fmt.Errorf("persist scheduler activity: %w", err)
+	}
 	l := &Lease{ID: id, Model: model, State: Queued, CreatedAt: time.Now().UTC()}
+	s.cancelResidenceLocked(model)
 	s.leases[id] = l
 	s.queue.push(id)
 	s.notify()
@@ -103,7 +173,7 @@ func (s *Scheduler) Get(id string) (LeaseStatus, error) {
 	if !ok {
 		return LeaseStatus{}, ErrNotFound
 	}
-	result := LeaseStatus{Lease: cloneLease(*l)}
+	result := LeaseStatus{Lease: s.leaseViewLocked(l)}
 	if l.State == Queued {
 		for i, queued := range s.queue {
 			if queued == id {
@@ -113,6 +183,19 @@ func (s *Scheduler) Get(id string) (LeaseStatus, error) {
 		}
 	}
 	return result, nil
+}
+
+// SetReleaseProtector installs the Runtime Core's single release guard.
+func (s *Scheduler) SetReleaseProtector(protector ReleaseProtector) {
+	s.mu.Lock()
+	s.releaseProtector = protector
+	s.mu.Unlock()
+}
+
+func (s *Scheduler) SetAdmissionGate(gate AdmissionGate) {
+	s.mu.Lock()
+	s.admissionGate = gate
+	s.mu.Unlock()
 }
 
 // WaitActive waits for an automatically queued lease to become usable.
@@ -143,7 +226,7 @@ func (s *Scheduler) WaitActive(ctx context.Context, id string) error {
 }
 
 // BeginInference atomically validates an active lease and pins its backend.
-func (s *Scheduler) BeginInference(id, model string, cancel context.CancelFunc) (func(), error) {
+func (s *Scheduler) BeginInference(id, model string, cancel context.CancelFunc, requestIDs ...string) (func(), error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	l, ok := s.leases[id]
@@ -151,7 +234,12 @@ func (s *Scheduler) BeginInference(id, model string, cancel context.CancelFunc) 
 		return nil, ErrNotFound
 	}
 	if l.State == Active && l.ExpiresAt != nil && !time.Now().Before(*l.ExpiresAt) {
-		l.State = Expired
+		proposed := cloneLease(*l)
+		proposed.State = Expired
+		if err := s.persistLeaseChangeLocked(id, proposed); err != nil {
+			return nil, fmt.Errorf("persist lease expiration: %w", err)
+		}
+		l.State = proposed.State
 		s.retireLeaseLocked(id)
 		s.notify()
 	}
@@ -167,9 +255,13 @@ func (s *Scheduler) BeginInference(id, model string, cancel context.CancelFunc) 
 	s.nextInferenceID++
 	inferenceID := s.nextInferenceID
 	if s.inferences[id] == nil {
-		s.inferences[id] = make(map[uint64]context.CancelFunc)
+		s.inferences[id] = make(map[uint64]inferencePin)
 	}
-	s.inferences[id][inferenceID] = cancel
+	requestID := ""
+	if len(requestIDs) > 0 {
+		requestID = requestIDs[0]
+	}
+	s.inferences[id][inferenceID] = inferencePin{requestID: requestID, cancel: cancel}
 	var once sync.Once
 	return func() {
 		once.Do(func() {
@@ -178,8 +270,7 @@ func (s *Scheduler) BeginInference(id, model string, cancel context.CancelFunc) 
 			if len(s.inferences[id]) == 0 {
 				delete(s.inferences, id)
 				if s.activeID == id && s.leases[id].State != Active {
-					s.activeID = ""
-					s.unloadWhenIdle = true
+					s.retireLeaseLocked(id)
 				}
 			}
 			s.notify()
@@ -189,10 +280,56 @@ func (s *Scheduler) BeginInference(id, model string, cancel context.CancelFunc) 
 }
 
 func (s *Scheduler) retireLeaseLocked(id string) {
-	if len(s.inferences[id]) == 0 && s.activeID == id {
+	if !s.isProtectedLocked(id) && s.activeID == id {
+		model := s.leases[id].Model
 		s.activeID = ""
-		s.unloadWhenIdle = true
+		s.scheduleResidenceLocked(model)
 	}
+}
+
+func (s *Scheduler) scheduleResidenceLocked(model string) {
+	if model == "" {
+		return
+	}
+	policy, ok := s.manager.Models()[model]
+	if !ok || policy.KeepAlive {
+		s.cancelResidenceLocked(model)
+		return
+	}
+	if policy.TimeAlive == "" || policy.TimeAlive == "0s" {
+		s.cancelResidenceLocked(model)
+		s.unloadWhenIdle, s.unloadModel = true, model
+		return
+	}
+	duration := policyDuration(policy.TimeAlive)
+	if duration <= 0 {
+		s.cancelResidenceLocked(model)
+		s.unloadWhenIdle, s.unloadModel = true, model
+		return
+	}
+	s.cancelResidenceLocked(model)
+	s.residenceTimers[model] = time.AfterFunc(duration, func() {
+		s.mu.Lock()
+		s.residenceDue[model] = true
+		s.mu.Unlock()
+		s.notify()
+	})
+}
+
+func (s *Scheduler) cancelResidenceLocked(model string) {
+	if timer := s.residenceTimers[model]; timer != nil {
+		timer.Stop()
+		delete(s.residenceTimers, model)
+	}
+	delete(s.residenceDue, model)
+	if s.unloadModel == model {
+		s.unloadWhenIdle, s.unloadModel = false, ""
+	}
+}
+
+func policyDuration(value string) time.Duration {
+	d, _ := time.ParseDuration(value)
+	return d
 }
 
 func (s *Scheduler) ActiveInferenceCount() int {
@@ -215,8 +352,13 @@ func (s *Scheduler) Heartbeat(id string) (Lease, error) {
 	if l.State == Expired {
 		return cloneLease(*l), ErrExpired
 	}
-	if l.State == Active && l.ExpiresAt != nil && !time.Now().Before(*l.ExpiresAt) {
-		l.State = Expired
+	if l.State == Active && l.ExpiresAt != nil && !time.Now().Before(*l.ExpiresAt) && !s.isProtectedLocked(id) {
+		proposed := cloneLease(*l)
+		proposed.State = Expired
+		if err := s.persistLeaseChangeLocked(id, proposed); err != nil {
+			return cloneLease(*l), fmt.Errorf("persist lease expiration: %w", err)
+		}
+		l.State = proposed.State
 		s.retireLeaseLocked(id)
 		s.notify()
 		return cloneLease(*l), ErrExpired
@@ -225,8 +367,13 @@ func (s *Scheduler) Heartbeat(id string) (Lease, error) {
 		return cloneLease(*l), ErrConflict
 	}
 	deadline := l.ActivatedAt.Add(s.maxLease)
-	if !time.Now().Before(deadline) {
-		l.State = Expired
+	if !time.Now().Before(deadline) && !s.isProtectedLocked(id) {
+		proposed := cloneLease(*l)
+		proposed.State = Expired
+		if err := s.persistLeaseChangeLocked(id, proposed); err != nil {
+			return cloneLease(*l), fmt.Errorf("persist lease expiration: %w", err)
+		}
+		l.State = proposed.State
 		s.retireLeaseLocked(id)
 		s.notify()
 		return cloneLease(*l), ErrExpired
@@ -235,35 +382,79 @@ func (s *Scheduler) Heartbeat(id string) (Lease, error) {
 	if end.After(deadline) {
 		end = deadline
 	}
-	l.ExpiresAt = &end
+	proposed := cloneLease(*l)
+	proposed.ExpiresAt = &end
+	if err := s.persistLeaseChangeLocked(id, proposed); err != nil {
+		return cloneLease(*l), fmt.Errorf("persist lease heartbeat: %w", err)
+	}
+	l.ExpiresAt = proposed.ExpiresAt
 	s.notify()
 	return cloneLease(*l), nil
 }
 
 func (s *Scheduler) Release(id string) (Lease, error) {
+	return s.release(id, "", "")
+}
+
+// ReleaseAutomatic is the only automatic release entry point. The request
+// identity is checked together with the lease before the scheduler changes it.
+func (s *Scheduler) ReleaseAutomatic(id, requestID, model string) (Lease, error) {
+	return s.release(id, requestID, model)
+}
+
+func (s *Scheduler) release(id, requestID, model string) (Lease, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	l, ok := s.leases[id]
 	if !ok {
 		return Lease{}, ErrNotFound
 	}
-	switch l.State {
+	if protected, reason := s.protectedLocked(id, requestID, model); protected {
+		return cloneLease(*l), fmt.Errorf("%w: %s", ErrInferenceProtected, reason)
+	}
+	proposed := cloneLease(*l)
+	cancelOperation := false
+	switch proposed.State {
 	case Queued:
-		s.queue.remove(id)
-		l.State = Cancelled
+		proposed.State = Cancelled
 	case Preparing:
-		l.State = Cancelled
-		if s.preparingID == id && s.operationCancel != nil {
-			s.operationCancel()
-		}
+		proposed.State = Cancelled
+		cancelOperation = s.preparingID == id && s.operationCancel != nil
 	case Active:
-		l.State = Completed
-		s.retireLeaseLocked(id)
+		proposed.State = Completed
 	default:
 		return cloneLease(*l), nil
 	}
+	if err := s.persistLeaseChangeLocked(id, proposed); err != nil {
+		return cloneLease(*l), fmt.Errorf("persist lease release: %w", err)
+	}
+	*l = proposed
+	if proposed.State == Cancelled {
+		s.queue.remove(id)
+	}
+	if cancelOperation {
+		s.operationCancel()
+	}
+	if proposed.State == Completed {
+		s.retireLeaseLocked(id)
+	}
 	s.notify()
 	return cloneLease(*l), nil
+}
+
+func (s *Scheduler) isProtectedLocked(id string) bool {
+	protected, _ := s.protectedLocked(id, "", "")
+	return protected
+}
+
+func (s *Scheduler) protectedLocked(id, requestID, model string) (bool, string) {
+	if len(s.inferences[id]) > 0 {
+		return true, "an admitted inference is still pinned"
+	}
+	if s.releaseProtector != nil {
+		return s.releaseProtector.Protected(id, requestID, model)
+	}
+	return false, ""
 }
 
 func (s *Scheduler) Snapshot() Snapshot {
@@ -273,18 +464,57 @@ func (s *Scheduler) Snapshot() Snapshot {
 	result.Pending = make([]Lease, 0, len(s.queue))
 	for _, id := range s.queue {
 		if l := s.leases[id]; l != nil {
-			result.Pending = append(result.Pending, cloneLease(*l))
+			result.Pending = append(result.Pending, s.leaseViewLocked(l))
 		}
 	}
 	if l := s.leases[s.activeID]; l != nil {
-		v := cloneLease(*l)
+		v := s.leaseViewLocked(l)
 		result.Active = &v
 	}
 	if l := s.leases[s.preparingID]; l != nil {
-		v := cloneLease(*l)
+		v := s.leaseViewLocked(l)
 		result.Preparing = &v
 	}
+	for _, model := range s.manager.Models() {
+		if model.PID == 0 && model.State == runtime.Stopped {
+			continue
+		}
+		result.Residents = append(result.Residents, Resident{Model: model.ID, State: string(model.State), Residency: model.Residency, KeepAlive: model.KeepAlive, TimeAlive: model.TimeAlive, ProcessInstanceID: model.ProcessInstanceID, PID: model.PID})
+	}
+	sort.Slice(result.Residents, func(i, j int) bool { return result.Residents[i].Model < result.Residents[j].Model })
 	return result
+}
+
+// RecoveryDiagnostics returns the durable scheduler evidence without exposing
+// mutable scheduler state. It does not restore, release, or expire anything.
+func (s *Scheduler) RecoveryDiagnostics() RecoveryDiagnostics {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result := RecoveryDiagnostics{StorePath: s.idempotencyPath, CleanShutdown: s.cleanShutdown, RecoveryBlocked: s.recoveryBlocked, Records: make([]RecoveryRecord, 0, len(s.idempotency))}
+	for _, record := range s.idempotency {
+		result.Records = append(result.Records, RecoveryRecord{Key: record.Key, Fingerprint: record.Fingerprint, Lease: cloneLease(record.Lease), CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt})
+	}
+	sort.Slice(result.Records, func(i, j int) bool { return result.Records[i].Key < result.Records[j].Key })
+	return result
+}
+
+// Leases returns a stable, read-only view of every in-memory lease. Recovery
+// uses it only for correlation; it never mutates this slice.
+func (s *Scheduler) Leases() []Lease {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result := make([]Lease, 0, len(s.leases))
+	for _, lease := range s.leases {
+		result = append(result, cloneLease(*lease))
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	return result
+}
+
+func (s *Scheduler) leaseViewLocked(l *Lease) Lease {
+	view := cloneLease(*l)
+	view.Protected, view.ProtectionReason = s.protectedLocked(l.ID, "", "")
+	return view
 }
 
 // Manual operations are accepted only when no lease is active or waiting, and
@@ -305,9 +535,26 @@ func (s *Scheduler) manualOperation(ctx context.Context, start bool, id string) 
 		s.mu.Unlock()
 		return ErrClosed
 	}
+	if s.recoveryBlocked {
+		s.mu.Unlock()
+		return ErrIdempotencyRecovery
+	}
+	if blocked, _ := s.manager.RecoveryRequired(); blocked {
+		s.mu.Unlock()
+		return ErrIdempotencyRecovery
+	}
+	if s.admissionGate != nil && s.admissionGate.AdmissionBlocked() {
+		s.mu.Unlock()
+		return ErrIdempotencyRecovery
+	}
 	if s.manualBusy || s.activeID != "" || s.preparingID != "" || len(s.queue) != 0 {
 		s.mu.Unlock()
 		return ErrConflict
+	}
+	s.cancelResidenceLocked(id)
+	if err := s.markDirtyLocked(); err != nil {
+		s.mu.Unlock()
+		return fmt.Errorf("persist scheduler activity: %w", err)
 	}
 	s.manualBusy = true
 	done := make(chan error, 1)
@@ -328,6 +575,18 @@ func (s *Scheduler) Shutdown(ctx context.Context) error {
 	s.closeOnce.Do(func() {
 		s.mu.Lock()
 		s.closing = true
+		for model, timer := range s.residenceTimers {
+			timer.Stop()
+			delete(s.residenceTimers, model)
+		}
+		s.residenceDue = make(map[string]bool)
+		cancelled := append([]string(nil), s.queue...)
+		if s.activeID != "" {
+			cancelled = append(cancelled, s.activeID)
+		}
+		if s.preparingID != "" {
+			cancelled = append(cancelled, s.preparingID)
+		}
 		for _, id := range s.queue {
 			if l := s.leases[id]; l != nil {
 				l.State = Cancelled
@@ -338,9 +597,9 @@ func (s *Scheduler) Shutdown(ctx context.Context) error {
 			l.State = Cancelled
 		}
 		for _, active := range s.inferences {
-			for _, cancel := range active {
-				if cancel != nil {
-					cancel()
+			for _, pin := range active {
+				if pin.cancel != nil {
+					pin.cancel()
 				}
 			}
 		}
@@ -350,6 +609,7 @@ func (s *Scheduler) Shutdown(ctx context.Context) error {
 		if l := s.leases[s.preparingID]; l != nil {
 			l.State = Cancelled
 		}
+		s.syncIdempotencyLocked(cancelled...)
 		if s.operationCancel != nil {
 			s.operationCancel()
 		}
@@ -393,6 +653,29 @@ func (s *Scheduler) worker() {
 
 func (s *Scheduler) step() {
 	s.mu.Lock()
+	if s.recoveryBlocked {
+		s.mu.Unlock()
+		return
+	}
+	for model := range s.residenceDue {
+		if s.activeID != "" && s.leases[s.activeID] != nil && s.leases[s.activeID].Model == model || s.hasQueuedModelLocked(model) || len(s.inferencesForModelLocked(model)) != 0 {
+			s.cancelResidenceLocked(model)
+			continue
+		}
+		delete(s.residenceDue, model)
+		if timer := s.residenceTimers[model]; timer != nil {
+			timer.Stop()
+			delete(s.residenceTimers, model)
+		}
+		s.mu.Unlock()
+		if err := s.manager.Stop(context.Background(), model); err != nil {
+			log.Printf("residence expiry for model %q: %v", model, err)
+		}
+		s.mu.Lock()
+		s.notify()
+		s.mu.Unlock()
+		return
+	}
 	if len(s.manual) > 0 {
 		cmd := s.manual[0]
 		s.manual = s.manual[1:]
@@ -415,8 +698,17 @@ func (s *Scheduler) step() {
 	}
 	if s.activeID != "" {
 		l := s.leases[s.activeID]
-		if l != nil && l.State == Active && l.ExpiresAt != nil && !time.Now().Before(*l.ExpiresAt) {
-			l.State = Expired
+		if l != nil && l.State == Active && l.ExpiresAt != nil && !time.Now().Before(*l.ExpiresAt) && !s.isProtectedLocked(s.activeID) {
+			proposed := cloneLease(*l)
+			proposed.State = Expired
+			if err := s.persistLeaseChangeLocked(s.activeID, proposed); err != nil {
+				s.recoveryBlocked = true
+				log.Printf("persist lease expiration: %v", err)
+				s.notify()
+				s.mu.Unlock()
+				return
+			}
+			l.State = proposed.State
 			s.retireLeaseLocked(s.activeID)
 			s.notify()
 		} else {
@@ -427,11 +719,28 @@ func (s *Scheduler) step() {
 			s.mu.Unlock()
 			status := s.manager.Status()
 			if status.State != runtime.Ready || status.ActiveModel != model {
+				// A recovery fixture may have completed the Runtime-owned stop
+				// before Scheduler commits the correlated lease. Do not turn that
+				// verified absence into FAILED: keep the lease protected so the
+				// reconciliation authority can close it. Unexpected FAILED and
+				// recovery-required runtime states retain the existing path below.
+				if status.State == runtime.Stopping || status.State == runtime.Stopped && status.PID == 0 {
+					return
+				}
 				s.mu.Lock()
 				if s.activeID == id {
 					if current := s.leases[id]; current != nil {
-						current.State = Failed
-						current.Error = "runtime process exited unexpectedly"
+						proposed := cloneLease(*current)
+						proposed.State = Failed
+						proposed.Error = "runtime process exited unexpectedly"
+						if err := s.persistLeaseChangeLocked(id, proposed); err != nil {
+							s.recoveryBlocked = true
+							log.Printf("persist unexpected runtime failure: %v", err)
+							s.notify()
+							s.mu.Unlock()
+							return
+						}
+						*current = proposed
 					}
 					s.retireLeaseLocked(id)
 				}
@@ -452,7 +761,17 @@ func (s *Scheduler) step() {
 			s.notify()
 			return
 		}
-		l.State = Preparing
+		proposed := cloneLease(*l)
+		proposed.State = Preparing
+		if err := s.persistLeaseChangeLocked(id, proposed); err != nil {
+			s.recoveryBlocked = true
+			log.Printf("persist lease preparation: %v", err)
+			s.queue = append([]string{id}, s.queue...)
+			s.notify()
+			s.mu.Unlock()
+			return
+		}
+		l.State = proposed.State
 		s.preparingID = id
 		opCtx, cancel := context.WithCancel(s.ctx)
 		s.operationCancel = cancel
@@ -464,21 +783,45 @@ func (s *Scheduler) step() {
 		return
 	}
 	unload := s.unloadWhenIdle
+	unloadModel := s.unloadModel
 	s.unloadWhenIdle = false
+	s.unloadModel = ""
 	manualModel := s.manualModel
 	s.mu.Unlock()
 	if unload && !manualModel {
-		s.stopCurrent()
+		s.stopModel(unloadModel)
 	}
 }
 
+func (s *Scheduler) hasQueuedModelLocked(model string) bool {
+	for _, id := range s.queue {
+		if lease := s.leases[id]; lease != nil && lease.Model == model {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Scheduler) inferencesForModelLocked(model string) []uint64 {
+	var result []uint64
+	for id, pins := range s.inferences {
+		lease := s.leases[id]
+		if lease == nil || lease.Model != model {
+			continue
+		}
+		for inferenceID := range pins {
+			result = append(result, inferenceID)
+		}
+	}
+	return result
+}
+
 func (s *Scheduler) activate(ctx context.Context, id, model string) error {
-	status := s.manager.Status()
-	if status.State == runtime.Ready && status.ActiveModel == model {
+	if _, ready := s.manager.CurrentProcessForModel(model); ready {
 		return nil
 	}
-	if status.State == runtime.Ready && status.ActiveModel != "" {
-		if err := s.manager.Stop(ctx, status.ActiveModel); err != nil {
+	if candidate := s.evictionCandidate(model); candidate != "" {
+		if err := s.manager.Stop(ctx, candidate); err != nil {
 			return err
 		}
 	}
@@ -486,6 +829,34 @@ func (s *Scheduler) activate(ctx context.Context, id, model string) error {
 		return err
 	}
 	return s.manager.Start(ctx, model)
+}
+
+func (s *Scheduler) evictionCandidate(target string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	models := s.manager.Models()
+	ids := make([]string, 0, len(models))
+	for id, status := range models {
+		if id == target || status.PID == 0 || status.KeepAlive || (status.TimeAlive == "" || status.TimeAlive == "0s") && s.unloadModel != id {
+			continue
+		}
+		if s.activeID != "" && s.leases[s.activeID] != nil && s.leases[s.activeID].Model == id {
+			continue
+		}
+		if len(s.inferencesForModelLocked(id)) != 0 {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return firstString(ids)
+}
+
+func firstString(values []string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	return values[0]
 }
 
 func (s *Scheduler) finishActivation(id string, err error) {
@@ -499,11 +870,25 @@ func (s *Scheduler) finishActivation(id string, err error) {
 	}
 	if l.State == Cancelled || s.closing {
 		if err == nil {
-			s.unloadWhenIdle = true
+			s.unloadWhenIdle, s.unloadModel = true, modelOfLease(l)
 		}
 	} else if err != nil {
-		l.State, l.Error = Failed, err.Error()
-		s.unloadWhenIdle = true
+		if errors.Is(err, runtime.ErrRecoveryRequired) {
+			s.recoveryBlocked = true
+		}
+		if blocked, _ := s.manager.RecoveryRequired(); blocked {
+			s.recoveryBlocked = true
+		}
+		proposed := cloneLease(*l)
+		proposed.State, proposed.Error = Failed, err.Error()
+		if persistErr := s.persistLeaseChangeLocked(id, proposed); persistErr != nil {
+			s.recoveryBlocked = true
+			log.Printf("persist failed lease result: %v", persistErr)
+			s.notify()
+			return
+		}
+		*l = proposed
+		s.unloadWhenIdle, s.unloadModel = true, modelOfLease(l)
 	} else {
 		now := time.Now().UTC()
 		end := now.Add(s.ttl)
@@ -511,12 +896,28 @@ func (s *Scheduler) finishActivation(id string, err error) {
 		if end.After(maxEnd) {
 			end = maxEnd
 		}
-		l.State, l.ActivatedAt, l.ExpiresAt = Active, &now, &end
+		proposed := cloneLease(*l)
+		proposed.State, proposed.ActivatedAt, proposed.ExpiresAt = Active, &now, &end
+		if persistErr := s.persistLeaseChangeLocked(id, proposed); persistErr != nil {
+			s.recoveryBlocked = true
+			log.Printf("persist active lease: %v", persistErr)
+			s.notify()
+			return
+		}
+		*l = proposed
 		s.activeID = id
 		s.manualModel = false
-		s.unloadWhenIdle = false
+		s.unloadWhenIdle, s.unloadModel = false, ""
+		s.cancelResidenceLocked(l.Model)
 	}
 	s.notify()
+}
+
+func modelOfLease(lease *Lease) string {
+	if lease == nil {
+		return ""
+	}
+	return lease.Model
 }
 
 func (s *Scheduler) runManual(cmd manualCommand) error {
@@ -530,18 +931,38 @@ func (s *Scheduler) runManual(cmd manualCommand) error {
 }
 
 func (s *Scheduler) stopCurrent() {
-	status := s.manager.Status()
-	if status.State == runtime.Ready && status.ActiveModel != "" {
-		ctx, cancel := context.WithTimeout(s.ctx, 30*time.Second)
-		defer cancel()
-		if err := s.manager.Stop(ctx, status.ActiveModel); err != nil {
-			log.Printf("stop runtime model %q: %v", status.ActiveModel, err)
+	for id, status := range s.manager.Models() {
+		if status.PID == 0 {
+			continue
 		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if err := s.manager.Stop(ctx, id); err != nil {
+			log.Printf("stop runtime model %q: %v", id, err)
+		}
+		cancel()
+	}
+}
+
+func (s *Scheduler) stopModel(model string) {
+	if model == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(s.ctx, 30*time.Second)
+	defer cancel()
+	if err := s.manager.Stop(ctx, model); err != nil {
+		log.Printf("stop runtime model %q: %v", model, err)
 	}
 }
 
 func (s *Scheduler) cleanup() {
 	s.mu.Lock()
+	cancelled := append([]string(nil), s.queue...)
+	if s.activeID != "" {
+		cancelled = append(cancelled, s.activeID)
+	}
+	if s.preparingID != "" {
+		cancelled = append(cancelled, s.preparingID)
+	}
 	for _, id := range s.queue {
 		if l := s.leases[id]; l != nil {
 			l.State = Cancelled
@@ -552,9 +973,9 @@ func (s *Scheduler) cleanup() {
 		l.State = Cancelled
 	}
 	for _, active := range s.inferences {
-		for _, cancel := range active {
-			if cancel != nil {
-				cancel()
+		for _, pin := range active {
+			if pin.cancel != nil {
+				pin.cancel()
 			}
 		}
 	}
@@ -564,6 +985,7 @@ func (s *Scheduler) cleanup() {
 	if l := s.leases[s.preparingID]; l != nil {
 		l.State = Cancelled
 	}
+	s.syncIdempotencyLocked(cancelled...)
 	if s.operationCancel != nil {
 		s.operationCancel()
 	}
@@ -576,6 +998,25 @@ func (s *Scheduler) cleanup() {
 	}
 	s.mu.Unlock()
 	s.stopCurrent()
+	status := s.manager.Status()
+	if !s.recoveryBlocked && status.PID == 0 && status.State != runtime.Starting && status.State != runtime.Stopping {
+		s.mu.Lock()
+		s.cleanShutdown = true
+		if err := s.writeIdempotencyLocked(); err != nil {
+			log.Printf("persist clean scheduler shutdown: %v", err)
+		}
+		s.mu.Unlock()
+	}
+}
+
+func (s *Scheduler) markDirtyLocked() error {
+	previous := s.cleanShutdown
+	s.cleanShutdown = false
+	if err := s.writeIdempotencyLocked(); err != nil {
+		s.cleanShutdown = previous
+		return err
+	}
+	return nil
 }
 
 func (s *Scheduler) notify() {
