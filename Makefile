@@ -1,4 +1,4 @@
-.PHONY: build test test-race vet run clean
+.PHONY: build test test-race test-real-crash vet run clean
 
 build:
 	@mkdir -p bin
@@ -9,6 +9,9 @@ test:
 
 test-race:
 	go test -race ./...
+
+test-real-crash:
+	LARM_REAL_CRASH=1 go test ./internal/recovery -run TestRealSIGKILLCrashRecovery -count=1 -v
 
 vet:
 	go vet ./...
