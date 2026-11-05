@@ -1,6 +1,7 @@
 package adminauth
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
@@ -71,6 +72,53 @@ func TestPrivateSocketIssueInspectAndShutdown(t *testing.T) {
 	if _, err := os.Lstat(cfg.SocketPath); !os.IsNotExist(err) {
 		t.Fatalf("socket residue: %v", err)
 	}
+}
+
+func TestPrivateSocketModelStopUsesScopedCapability(t *testing.T) {
+	service, _, _, instanceID := authServiceFixture(t)
+	public, private, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	keyPath := filepath.Join(dir, "public.json")
+	privatePath := filepath.Join(dir, "private.json")
+	writePrivateJSON(t, keyPath, publicKeyFile{Version: 1, Keys: map[string]string{"key-1": base64.RawStdEncoding.EncodeToString(public)}})
+	writePrivateJSON(t, privatePath, privateKeyFile{Version: 1, KeyID: "key-1", Private: base64.RawStdEncoding.EncodeToString(private)})
+	uid := os.Geteuid()
+	socketDir, err := os.MkdirTemp("/tmp", "larm-s-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(socketDir)
+	cfg := config.AdminConfig{Enabled: true, SocketPath: filepath.Join(socketDir, "admin.sock"), PublicKeyPath: keyPath, AllowedUID: &uid, Audience: "larm-admin", CapabilityTTL: "5m"}
+	server, err := NewServer(cfg, instanceID, service)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopper := &fakeModelStopper{}
+	server.SetModelStopper(stopper)
+	if err := server.Listen(); err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	capabilityPath := filepath.Join(dir, "model-stop.json")
+	if _, err := IssueModelStop(cfg.SocketPath, privatePath, capabilityPath, "model-1", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := StopModel(cfg.SocketPath, capabilityPath, "model-1"); err != nil {
+		t.Fatal(err)
+	}
+	if stopper.model != "model-1" {
+		t.Fatalf("stopper model = %q", stopper.model)
+	}
+}
+
+type fakeModelStopper struct{ model string }
+
+func (f *fakeModelStopper) ManualStop(_ context.Context, model string) error {
+	f.model = model
+	return nil
 }
 
 func TestExistingSocketIsNeverOverwritten(t *testing.T) {

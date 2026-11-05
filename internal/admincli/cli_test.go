@@ -5,6 +5,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -200,5 +202,76 @@ func TestMissingIncidentIsExplicitError(t *testing.T) {
 	}
 	if !strings.Contains(errors.String(), "HTTP 404") || strings.Contains(errors.String(), "incident secret") {
 		t.Fatalf("unexpected error output: %s", errors.String())
+	}
+}
+
+func TestReadOnlyOperationalCommandsRenderExistingSnapshots(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/api/v1/models":
+			_, _ = io.WriteString(w, `[{"id":"commit","state":"READY","residency":"READY_PERSISTENT","keep_alive":true,"pid":42,"process_instance_id":"pi-1","active_leases":0,"capacity_occupied":true}]`)
+		case "/api/v1/status":
+			_, _ = io.WriteString(w, `{"runtime":"llamacpp","state":"READY","queued_requests":1,"recovery_required":false,"scheduler":{"capacity_used":1,"capacity_limit":2}}`)
+		case "/api/v1/queue":
+			_, _ = io.WriteString(w, `{"pending":[{"model":"code-fast","state":"QUEUED","lease_id":"lease-1","created_at":"2026-11-05T00:00:00Z"}],"capacity_used":1,"capacity_limit":2}`)
+		case "/api/v1/recovery/status":
+			_, _ = io.WriteString(w, `{}`)
+		case "/api/v1/inferences", "/api/v1/recovery/leases", "/api/v1/processes":
+			_, _ = io.WriteString(w, `[]`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	var output, errors strings.Builder
+	if code := RunReadOnly([]string{"-url", server.URL, "models"}, &output, &errors); code != 0 || !strings.Contains(output.String(), "READY_PERSISTENT") || !strings.Contains(output.String(), "pi-1") {
+		t.Fatalf("models: code=%d output=%q stderr=%q", code, output.String(), errors.String())
+	}
+	output.Reset()
+	if code := RunReadOnly([]string{"-url", server.URL, "status"}, &output, &errors); code != 0 || !strings.Contains(output.String(), "CAPACITY\t1/2") || !strings.Contains(output.String(), "QUEUED\t1") {
+		t.Fatalf("status: code=%d output=%q stderr=%q", code, output.String(), errors.String())
+	}
+	output.Reset()
+	if code := RunReadOnly([]string{"-url", server.URL, "queue"}, &output, &errors); code != 0 || !strings.Contains(output.String(), "1\tcode-fast\tQUEUED\tlease-1") {
+		t.Fatalf("queue: code=%d output=%q stderr=%q", code, output.String(), errors.String())
+	}
+}
+
+func TestDoctorIsReadOnlyAndClassifiesStoppedServiceAsWarning(t *testing.T) {
+	dir := t.TempDir()
+	model := filepath.Join(dir, "model.gguf")
+	if err := os.WriteFile(model, []byte("fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(dir, "models.yaml")
+	config := `runtime:
+  binary: "` + os.Args[0] + `"
+models:
+  model:
+    path: "` + model + `"
+    port: 39101
+    context: 1024
+    batch: 128
+    ubatch: 32
+    gpu_layers: "0"
+    parallel: 1
+    temperature: 0.2
+    top_p: 0.9
+    top_k: 40
+`
+	if err := os.WriteFile(configPath, []byte(config), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var output, errors strings.Builder
+	if code := RunReadOnly([]string{"-config", configPath, "-url", "http://127.0.0.1:1", "doctor"}, &output, &errors); code != 0 {
+		t.Fatalf("doctor code=%d output=%q stderr=%q", code, output.String(), errors.String())
+	}
+	if !strings.Contains(output.String(), "CONFIG\tPASS") || !strings.Contains(output.String(), "SERVICE\tWARN") || !strings.Contains(output.String(), "API\tWARN") {
+		t.Fatalf("doctor output=%q", output.String())
+	}
+	if _, err := os.Stat(configPath); err != nil {
+		t.Fatalf("doctor changed config: %v", err)
 	}
 }

@@ -32,6 +32,8 @@ func TestMain(m *testing.M) {
 		case "die":
 			time.Sleep(80 * time.Millisecond)
 			os.Exit(9)
+		case "ignore":
+			startFakeServerIgnoringTermination(port)
 		case "crash":
 			serveFakeServer(port)
 			time.Sleep(300 * time.Millisecond)
@@ -55,6 +57,16 @@ func startFakeServer(port string) {
 	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT)
 	<-signals
 	logProcessEvent("STOP", port)
+}
+
+func startFakeServerIgnoringTermination(port string) {
+	serveFakeServer(port)
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT)
+	if <-signals == syscall.SIGTERM {
+		logProcessEvent("STOPPING", port)
+	}
+	select {}
 }
 
 func serveFakeServer(port string) {
@@ -253,14 +265,14 @@ func TestConcurrentRequestsAndShutdownCancelPending(t *testing.T) {
 	}
 }
 
-func TestManualOperationsCannotBypassQueueAndAreSerialized(t *testing.T) {
+func TestManualStopDrainsResidentBeforeQueuedLease(t *testing.T) {
 	_, s := testScheduler(t, "normal", 1, time.Second, time.Second, 5, time.Second, time.Second)
 	if err := s.ManualStart(context.Background(), "model-1"); err != nil {
 		t.Fatal(err)
 	}
 	lease, _ := s.Request("model-1")
-	if err := s.ManualStop(context.Background(), "model-1"); err == nil {
-		t.Fatal("manual stop bypassed queued lease")
+	if err := s.ManualStop(context.Background(), "model-1"); err != nil {
+		t.Fatal(err)
 	}
 	waitLease(t, s, lease.ID, Active)
 	if _, err := s.Release(lease.ID); err != nil {

@@ -158,3 +158,29 @@ func TestCapabilityConcurrentReservationAndRevocation(t *testing.T) {
 		t.Fatalf("revoked capability = %+v", result)
 	}
 }
+
+func TestModelStopCapabilityIsTargetedAndReplayProtected(t *testing.T) {
+	service, _, oldPolicy, _ := capabilityFixture(t)
+	public, generatedPrivate, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := oldPolicy
+	policy.AllowedKeys = map[string]ed25519.PublicKey{"key-stop": public}
+	policy.AllowedActions = map[string]bool{ModelStopAction: true}
+	capability, err := service.PrepareCapability(CapabilityRequest{AllowedOperation: ModelStopAction, ModelID: "model-1", TTL: time.Minute}, "uid:123", policy, time.Now().UTC())
+	if err != nil {
+		t.Fatal(err)
+	}
+	capability, err = capability.Sign(generatedPrivate, "key-stop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result := service.ValidateCapability(capability, "uid:123", policy, time.Now().UTC()); result.Decision != Authorized {
+		t.Fatalf("model stop authorization = %+v", result)
+	}
+	capability.ModelID = "model-2"
+	if result := service.ValidateCapability(capability, "uid:123", policy, time.Now().UTC()); result.Decision != InvalidSignature {
+		t.Fatalf("retargeted capability = %+v", result)
+	}
+}

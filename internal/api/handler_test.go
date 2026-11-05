@@ -198,6 +198,32 @@ func TestLeaseHTTPFlowAndLegacyStatus(t *testing.T) {
 	}
 }
 
+func TestModelsJSONOmitsFilesystemPathAndKeepsInternalConfiguration(t *testing.T) {
+	manager, sched := apiTestScheduler(t)
+	server := httptest.NewServer(NewHandler(manager, sched))
+	defer server.Close()
+
+	internalPath := manager.Models()["model-1"].Path
+	response, err := server.Client().Get(server.URL + "/api/v1/models")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	var models []map[string]json.RawMessage
+	if err := json.NewDecoder(response.Body).Decode(&models); err != nil {
+		t.Fatal(err)
+	}
+	if len(models) == 0 {
+		t.Fatal("models response is empty")
+	}
+	if _, ok := models[0]["path"]; ok {
+		t.Fatalf("models response exposed filesystem path: %s", internalPath)
+	}
+	if got := manager.Models()["model-1"].Path; got != internalPath || got == "" {
+		t.Fatalf("internal model path was not preserved: %q", got)
+	}
+}
+
 func TestIdempotentLeaseHTTPReplayConflictAndValidation(t *testing.T) {
 	manager, sched := apiTestScheduler(t)
 	server := httptest.NewServer(NewHandler(manager, sched))
