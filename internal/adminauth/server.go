@@ -4,6 +4,7 @@ package adminauth
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -28,15 +29,22 @@ type PeerIdentity struct {
 func (p PeerIdentity) String() string { return fmt.Sprintf("uid:%d", p.UID) }
 
 type Server struct {
-	listener  net.Listener
-	path      string
-	created   os.FileInfo
-	service   *recovery.Service
-	policy    recovery.CapabilityPolicy
-	config    config.AdminConfig
-	stop      chan struct{}
-	wg        sync.WaitGroup
-	closeOnce sync.Once
+	listener     net.Listener
+	path         string
+	created      os.FileInfo
+	service      *recovery.Service
+	policy       recovery.CapabilityPolicy
+	config       config.AdminConfig
+	modelStopper ModelStopper
+	stop         chan struct{}
+	wg           sync.WaitGroup
+	closeOnce    sync.Once
+}
+
+// ModelStopper is implemented by Scheduler. The admin socket never signals a
+// process directly; the scheduler remains the serialization authority.
+type ModelStopper interface {
+	ManualStop(context.Context, string) error
 }
 
 type request struct {
@@ -46,6 +54,7 @@ type request struct {
 	AllowedOperation string               `json:"allowed_operation,omitempty"`
 	TTLSeconds       int                  `json:"ttl_seconds,omitempty"`
 	Capability       *recovery.Capability `json:"capability,omitempty"`
+	ModelID          string               `json:"model_id,omitempty"`
 }
 
 type response struct {
@@ -74,8 +83,13 @@ func NewServer(cfg config.AdminConfig, instanceID string, service *recovery.Serv
 	if audience == "" {
 		audience = "larm-admin"
 	}
-	return &Server{path: cfg.SocketPath, service: service, policy: recovery.CapabilityPolicy{Issuer: recovery.CapabilityIssuer, Audience: audience, InstanceID: instanceID, AllowedUID: *cfg.AllowedUID, AllowedKeys: keys, AllowedActions: map[string]bool{recovery.RecoveryReconcileAction: true}}, config: cfg, stop: make(chan struct{})}, nil
+	var stopper ModelStopper
+	return &Server{path: cfg.SocketPath, service: service, policy: recovery.CapabilityPolicy{Issuer: recovery.CapabilityIssuer, Audience: audience, InstanceID: instanceID, AllowedUID: *cfg.AllowedUID, AllowedKeys: keys, AllowedActions: map[string]bool{recovery.RecoveryReconcileAction: true, recovery.ModelStopAction: true}}, config: cfg, modelStopper: stopper, stop: make(chan struct{})}, nil
 }
+
+// SetModelStopper wires the already-created Scheduler without changing the
+// existing constructor used by recovery validation fixtures.
+func (s *Server) SetModelStopper(stopper ModelStopper) { s.modelStopper = stopper }
 
 func (s *Server) Listen() error {
 	if err := secureParent(filepath.Dir(s.path)); err != nil {
@@ -131,7 +145,7 @@ func (s *Server) acceptLoop() {
 
 func (s *Server) handle(conn net.Conn) {
 	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
 	identity, err := peerIdentity(conn)
 	if err != nil || identity.UID != s.policy.AllowedUID {
 		writeResponse(conn, response{Error: "administrative peer identity is not authorized"})
@@ -149,7 +163,7 @@ func (s *Server) handle(conn net.Conn) {
 		writeResponse(conn, response{OK: true, Identity: operator})
 	case "issue_prepare":
 		ttl := time.Duration(req.TTLSeconds) * time.Second
-		payload, err := s.service.PrepareCapability(recovery.CapabilityRequest{IncidentID: req.IncidentID, PlanID: req.PlanID, AllowedOperation: req.AllowedOperation, TTL: ttl}, operator, s.policy, time.Now().UTC())
+		payload, err := s.service.PrepareCapability(recovery.CapabilityRequest{IncidentID: req.IncidentID, PlanID: req.PlanID, AllowedOperation: req.AllowedOperation, ModelID: req.ModelID, TTL: ttl}, operator, s.policy, time.Now().UTC())
 		if err != nil {
 			if auditErr := s.service.RecordCapabilityAttempt(req.IncidentID, req.PlanID, operator, s.policy.InstanceID, "CAPABILITY_PREPARE_REJECTED", "REJECTED", err.Error()); auditErr != nil {
 				err = auditErr
@@ -172,7 +186,7 @@ func (s *Server) handle(conn net.Conn) {
 			writeResponse(conn, response{Decision: result.Decision, Reason: result.Reason})
 			return
 		}
-		writeResponse(conn, response{OK: true, Decision: result.Decision, Capability: map[string]any{"capability_id": req.Capability.CapabilityID, "incident_id": req.Capability.IncidentID, "plan_id": req.Capability.PlanID, "expires_at": req.Capability.ExpiresAt, "allowed_operation": req.Capability.AllowedOperation}})
+		writeResponse(conn, response{OK: true, Decision: result.Decision, Capability: map[string]any{"capability_id": req.Capability.CapabilityID, "incident_id": req.Capability.IncidentID, "plan_id": req.Capability.PlanID, "model_id": req.Capability.ModelID, "expires_at": req.Capability.ExpiresAt, "allowed_operation": req.Capability.AllowedOperation}})
 	case "reconcile":
 		if req.Capability == nil {
 			writeResponse(conn, response{Error: "capability is required"})
@@ -198,6 +212,39 @@ func (s *Server) handle(conn net.Conn) {
 			return
 		}
 		writeResponse(conn, response{OK: true, Decision: recovery.Authorized, Phase: "COMPLETE", Capability: map[string]any{"capability_id": req.Capability.CapabilityID, "incident_id": req.Capability.IncidentID, "plan_id": req.Capability.PlanID, "result": "RECONCILED"}})
+	case "model_stop":
+		if s.modelStopper == nil {
+			writeResponse(conn, response{Error: "model stop authority is unavailable"})
+			return
+		}
+		if req.Capability == nil || req.Capability.AllowedOperation != recovery.ModelStopAction || req.Capability.ModelID == "" || req.ModelID != req.Capability.ModelID {
+			writeResponse(conn, response{Error: "model stop capability scope is invalid"})
+			return
+		}
+		reserved, err := s.service.ReserveCapability(*req.Capability, operator, s.policy, time.Now().UTC())
+		if err != nil || reserved.Decision != recovery.Authorized {
+			writeResponse(conn, response{Decision: reserved.Decision, Reason: reserved.Reason, Error: errorText(err, reserved.Reason)})
+			return
+		}
+		if err := s.service.RecordAdministrativeAction(req.Capability.ModelID, operator, "MODEL_STOP_REQUESTED", "REQUESTED", ""); err != nil {
+			writeResponse(conn, response{Decision: recovery.Rejected, Reason: err.Error(), Error: err.Error()})
+			return
+		}
+		if err := s.modelStopper.ManualStop(context.Background(), req.Capability.ModelID); err != nil {
+			_ = s.service.RecordAdministrativeAction(req.Capability.ModelID, operator, "MODEL_STOP", "REJECTED", err.Error())
+			writeResponse(conn, response{Decision: recovery.Rejected, Reason: err.Error(), Error: err.Error()})
+			return
+		}
+		if err := s.service.RecordAdministrativeAction(req.Capability.ModelID, operator, "MODEL_STOP", "STOPPED", ""); err != nil {
+			writeResponse(conn, response{Decision: recovery.Rejected, Reason: err.Error(), Error: err.Error()})
+			return
+		}
+		consumed, consumeErr := s.service.ConsumeCapability(*req.Capability, operator, s.policy, time.Now().UTC())
+		if consumeErr != nil || consumed.Decision != recovery.Authorized && consumed.Decision != recovery.Replayed {
+			writeResponse(conn, response{Decision: consumed.Decision, Reason: consumed.Reason, Error: errorText(consumeErr, consumed.Reason)})
+			return
+		}
+		writeResponse(conn, response{OK: true, Decision: consumed.Decision, Phase: "COMPLETE", Capability: map[string]any{"capability_id": req.Capability.CapabilityID, "model_id": req.Capability.ModelID, "result": "STOPPED"}})
 	default:
 		writeResponse(conn, response{Error: "unknown administrative operation"})
 	}
