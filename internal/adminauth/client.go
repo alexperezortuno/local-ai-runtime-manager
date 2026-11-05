@@ -48,6 +48,32 @@ func Issue(socket, privateKeyPath, outputPath, incidentID, planID, operation str
 	return result.Capability, nil
 }
 
+func IssueModelStop(socket, privateKeyPath, outputPath, modelID string, ttl time.Duration) (map[string]any, error) {
+	result, err := call(socket, request{Operation: "issue_prepare", AllowedOperation: recovery.ModelStopAction, ModelID: modelID, TTLSeconds: int(ttl / time.Second)})
+	if err != nil {
+		return nil, err
+	}
+	if result.Payload == nil {
+		return nil, errors.New("admin server returned no capability payload")
+	}
+	private, keyID, err := loadPrivateKey(privateKeyPath)
+	if err != nil {
+		return nil, err
+	}
+	capability, err := result.Payload.Sign(private, keyID)
+	if err != nil {
+		return nil, err
+	}
+	result, err = call(socket, request{Operation: "issue_commit", Capability: &capability})
+	if err != nil {
+		return nil, err
+	}
+	if err := writeCapability(outputPath, capability); err != nil {
+		return nil, err
+	}
+	return result.Capability, nil
+}
+
 func Inspect(socket, path string) (map[string]any, error) {
 	capability, err := readCapability(path)
 	if err != nil {
@@ -66,6 +92,21 @@ func Execute(socket, capabilityPath string) (map[string]any, error) {
 		return nil, err
 	}
 	result, err := call(socket, request{Operation: "reconcile", Capability: &capability})
+	if err != nil {
+		return nil, err
+	}
+	return result.Capability, nil
+}
+
+func StopModel(socket, capabilityPath, modelID string) (map[string]any, error) {
+	capability, err := readCapability(capabilityPath)
+	if err != nil {
+		return nil, err
+	}
+	if capability.AllowedOperation != recovery.ModelStopAction || capability.ModelID != modelID {
+		return nil, errors.New("capability is not scoped to this model stop")
+	}
+	result, err := call(socket, request{Operation: "model_stop", ModelID: modelID, Capability: &capability})
 	if err != nil {
 		return nil, err
 	}
