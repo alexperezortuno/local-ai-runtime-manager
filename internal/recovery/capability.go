@@ -18,6 +18,7 @@ const (
 	CapabilityAlgorithm     = "Ed25519"
 	CapabilityIssuer        = "larm-admin"
 	RecoveryReconcileAction = "recovery.reconcile"
+	ModelStopAction         = "model.stop"
 	DefaultCapabilityTTL    = 5 * time.Minute
 	MaxCapabilityTTL        = 15 * time.Minute
 )
@@ -60,6 +61,7 @@ type Capability struct {
 	ExpiresAt        time.Time `json:"expires_at"`
 	Nonce            string    `json:"nonce"`
 	AllowedOperation string    `json:"allowed_operation"`
+	ModelID          string    `json:"model_id,omitempty"`
 	KeyID            string    `json:"key_id"`
 	Algorithm        string    `json:"algorithm"`
 	Signature        string    `json:"signature"`
@@ -80,6 +82,7 @@ type capabilityPayload struct {
 	ExpiresAt        time.Time `json:"expires_at"`
 	Nonce            string    `json:"nonce"`
 	AllowedOperation string    `json:"allowed_operation"`
+	ModelID          string    `json:"model_id,omitempty"`
 	KeyID            string    `json:"key_id"`
 	Algorithm        string    `json:"algorithm"`
 }
@@ -88,6 +91,7 @@ type CapabilityRequest struct {
 	IncidentID       string
 	PlanID           string
 	AllowedOperation string
+	ModelID          string
 	TTL              time.Duration
 }
 
@@ -120,6 +124,18 @@ func (s *Service) RecordCapabilityAttempt(incidentID, planID, operator, instance
 	return nil
 }
 
+// RecordAdministrativeAction keeps model-control audit entries in the same
+// durable store as capability validation and recovery actions.
+func (s *Service) RecordAdministrativeAction(modelID, operator, action, result, reason string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.appendAuditLocked(AuditEvent{IncidentID: auditScope("", modelID), ModelID: modelID, Actor: operator, OperatorIdentity: operator, InstanceID: "", AuthorizationMechanism: "unix-peer+ed25519", Action: action, Result: result, Rejection: reason}); err != nil {
+		s.storeError = fmt.Errorf("%w: %v", ErrAuditPersistence, err)
+		return s.storeError
+	}
+	return nil
+}
+
 type capabilityRecord struct {
 	CapabilityID     string    `json:"capability_id"`
 	Fingerprint      string    `json:"fingerprint"`
@@ -134,11 +150,18 @@ type capabilityRecord struct {
 // PrepareCapability creates the unsigned, server-bound payload. The private
 // signing key remains in the external admin client, never in LARM.
 func (s *Service) PrepareCapability(req CapabilityRequest, operator string, policy CapabilityPolicy, now time.Time) (Capability, error) {
-	if strings.TrimSpace(operator) == "" || strings.TrimSpace(req.IncidentID) == "" || strings.TrimSpace(req.AllowedOperation) == "" {
+	if strings.TrimSpace(operator) == "" || strings.TrimSpace(req.AllowedOperation) == "" {
 		return Capability{}, fmt.Errorf("%w: incomplete request", ErrCapabilityScope)
 	}
 	if !policy.AllowedActions[req.AllowedOperation] {
 		return Capability{}, fmt.Errorf("%w: operation is not allowed", ErrCapabilityScope)
+	}
+	modelAction := req.AllowedOperation == ModelStopAction
+	if modelAction && strings.TrimSpace(req.ModelID) == "" {
+		return Capability{}, fmt.Errorf("%w: model is required", ErrCapabilityScope)
+	}
+	if !modelAction && strings.TrimSpace(req.IncidentID) == "" {
+		return Capability{}, fmt.Errorf("%w: incident is required", ErrCapabilityScope)
 	}
 	if req.TTL <= 0 {
 		req.TTL = DefaultCapabilityTTL
@@ -154,17 +177,21 @@ func (s *Service) PrepareCapability(req CapabilityRequest, operator string, poli
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	plan, ok := s.plans[req.PlanID]
-	if !ok || plan.IncidentID != req.IncidentID {
-		return Capability{}, ErrNotFound
-	}
-	current := s.planForIncidentLocked(req.IncidentID)
-	if current.PlanID != req.PlanID || current.SnapshotVersion != plan.SnapshotVersion || current.EvidenceDigest != plan.EvidenceDigest {
-		return Capability{}, ErrPlanStale
-	}
-	incident := s.incidents[req.IncidentID]
-	if incident.Status == StatusResolved {
-		return Capability{}, fmt.Errorf("%w: incident is already resolved", ErrCapabilityScope)
+	var plan RecoveryPlan
+	if !modelAction {
+		var ok bool
+		plan, ok = s.plans[req.PlanID]
+		if !ok || plan.IncidentID != req.IncidentID {
+			return Capability{}, ErrNotFound
+		}
+		current := s.planForIncidentLocked(req.IncidentID)
+		if current.PlanID != req.PlanID || current.SnapshotVersion != plan.SnapshotVersion || current.EvidenceDigest != plan.EvidenceDigest {
+			return Capability{}, ErrPlanStale
+		}
+		incident := s.incidents[req.IncidentID]
+		if incident.Status == StatusResolved {
+			return Capability{}, fmt.Errorf("%w: incident is already resolved", ErrCapabilityScope)
+		}
 	}
 	id, err := randomID()
 	if err != nil {
@@ -182,8 +209,8 @@ func (s *Service) PrepareCapability(req CapabilityRequest, operator string, poli
 	if audience == "" {
 		audience = "larm-admin"
 	}
-	capability := Capability{CapabilityID: id, Version: CapabilityVersion, Issuer: issuer, Audience: audience, InstanceID: policy.InstanceID, OperatorIdentity: operator, IncidentID: req.IncidentID, PlanID: req.PlanID, SnapshotVersion: plan.SnapshotVersion, EvidenceDigest: plan.EvidenceDigest, IssuedAt: now.UTC(), ExpiresAt: now.UTC().Add(req.TTL), Nonce: nonce, AllowedOperation: req.AllowedOperation, Algorithm: CapabilityAlgorithm}
-	if err := s.appendAuditLocked(AuditEvent{IncidentID: req.IncidentID, PlanID: req.PlanID, Actor: operator, OperatorIdentity: operator, CapabilityID: capability.CapabilityID, EvidenceDigest: plan.EvidenceDigest, InstanceID: policy.InstanceID, AuthorizationMechanism: "unix-peer+ed25519", Action: "CAPABILITY_PREPARED", Result: "PREPARED"}); err != nil {
+	capability := Capability{CapabilityID: id, Version: CapabilityVersion, Issuer: issuer, Audience: audience, InstanceID: policy.InstanceID, OperatorIdentity: operator, IncidentID: req.IncidentID, PlanID: req.PlanID, SnapshotVersion: plan.SnapshotVersion, EvidenceDigest: plan.EvidenceDigest, IssuedAt: now.UTC(), ExpiresAt: now.UTC().Add(req.TTL), Nonce: nonce, AllowedOperation: req.AllowedOperation, ModelID: req.ModelID, Algorithm: CapabilityAlgorithm}
+	if err := s.appendAuditLocked(AuditEvent{IncidentID: auditScope(req.IncidentID, req.ModelID), PlanID: req.PlanID, ModelID: req.ModelID, Actor: operator, OperatorIdentity: operator, CapabilityID: capability.CapabilityID, EvidenceDigest: plan.EvidenceDigest, InstanceID: policy.InstanceID, AuthorizationMechanism: "unix-peer+ed25519", Action: "CAPABILITY_PREPARED", Result: "PREPARED"}); err != nil {
 		s.storeError = fmt.Errorf("%w: %v", ErrAuditPersistence, err)
 		return Capability{}, s.storeError
 	}
@@ -191,7 +218,7 @@ func (s *Service) PrepareCapability(req CapabilityRequest, operator string, poli
 }
 
 func (c Capability) Payload() ([]byte, error) {
-	return json.Marshal(capabilityPayload{CapabilityID: c.CapabilityID, Version: c.Version, Issuer: c.Issuer, Audience: c.Audience, InstanceID: c.InstanceID, OperatorIdentity: c.OperatorIdentity, IncidentID: c.IncidentID, PlanID: c.PlanID, SnapshotVersion: c.SnapshotVersion, EvidenceDigest: c.EvidenceDigest, IssuedAt: c.IssuedAt.UTC(), ExpiresAt: c.ExpiresAt.UTC(), Nonce: c.Nonce, AllowedOperation: c.AllowedOperation, KeyID: c.KeyID, Algorithm: c.Algorithm})
+	return json.Marshal(capabilityPayload{CapabilityID: c.CapabilityID, Version: c.Version, Issuer: c.Issuer, Audience: c.Audience, InstanceID: c.InstanceID, OperatorIdentity: c.OperatorIdentity, IncidentID: c.IncidentID, PlanID: c.PlanID, SnapshotVersion: c.SnapshotVersion, EvidenceDigest: c.EvidenceDigest, IssuedAt: c.IssuedAt.UTC(), ExpiresAt: c.ExpiresAt.UTC(), Nonce: c.Nonce, AllowedOperation: c.AllowedOperation, ModelID: c.ModelID, KeyID: c.KeyID, Algorithm: c.Algorithm})
 }
 
 func (c Capability) Sign(private ed25519.PrivateKey, keyID string) (Capability, error) {
@@ -249,6 +276,13 @@ func (s *Service) ValidateCapability(c Capability, operator string, policy Capab
 	if !strings.HasPrefix(operator, "uid:") || uidErr != nil || uid != policy.AllowedUID || c.Issuer != policy.Issuer || c.Audience != policy.Audience || c.InstanceID != policy.InstanceID || c.Version != CapabilityVersion || c.Algorithm != CapabilityAlgorithm || c.OperatorIdentity != operator || c.AllowedOperation == "" || !policy.AllowedActions[c.AllowedOperation] {
 		return CapabilityResult{Decision: InvalidScope, Reason: ErrCapabilityScope.Error()}
 	}
+	modelAction := c.AllowedOperation == ModelStopAction
+	if modelAction && strings.TrimSpace(c.ModelID) == "" {
+		return CapabilityResult{Decision: InvalidScope, Reason: ErrCapabilityScope.Error()}
+	}
+	if !modelAction && (c.IncidentID == "" || c.PlanID == "" || c.SnapshotVersion == "" || c.EvidenceDigest == "") {
+		return CapabilityResult{Decision: InvalidScope, Reason: ErrCapabilityScope.Error()}
+	}
 	if err := s.Refresh(); err != nil {
 		return CapabilityResult{Decision: Rejected, Reason: err.Error()}
 	}
@@ -257,15 +291,20 @@ func (s *Service) ValidateCapability(c Capability, operator string, policy Capab
 	if s.revokedNonce[c.Nonce] {
 		return CapabilityResult{Decision: Replayed, Reason: "capability nonce has been revoked"}
 	}
-	plan, ok := s.plans[c.PlanID]
-	if !ok || plan.IncidentID != c.IncidentID {
-		return CapabilityResult{Decision: Rejected, Reason: ErrNotFound.Error()}
+	if !modelAction {
+		plan, ok := s.plans[c.PlanID]
+		if !ok || plan.IncidentID != c.IncidentID {
+			return CapabilityResult{Decision: Rejected, Reason: ErrNotFound.Error()}
+		}
+		current := s.planForIncidentLocked(c.IncidentID)
+		if current.PlanID != c.PlanID || current.SnapshotVersion != c.SnapshotVersion || current.EvidenceDigest != c.EvidenceDigest {
+			return CapabilityResult{Decision: StalePlan, Reason: ErrPlanStale.Error()}
+		}
 	}
-	current := s.planForIncidentLocked(c.IncidentID)
-	if current.PlanID != c.PlanID || current.SnapshotVersion != c.SnapshotVersion || current.EvidenceDigest != c.EvidenceDigest {
-		return CapabilityResult{Decision: StalePlan, Reason: ErrPlanStale.Error()}
+	if c.CapabilityID == "" || c.Nonce == "" {
+		return CapabilityResult{Decision: InvalidScope, Reason: ErrCapabilityScope.Error()}
 	}
-	if c.CapabilityID == "" || c.Nonce == "" || c.EvidenceDigest == "" || c.SnapshotVersion == "" {
+	if !modelAction && (c.EvidenceDigest == "" || c.SnapshotVersion == "") {
 		return CapabilityResult{Decision: InvalidScope, Reason: ErrCapabilityScope.Error()}
 	}
 	if record, ok := s.capabilities[c.CapabilityID]; ok {
@@ -300,11 +339,7 @@ func (s *Service) AuthorizeCapability(c Capability, operator string, policy Capa
 	result := s.ValidateCapability(c, operator, policy, now)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	incidentID := c.IncidentID
-	if incidentID == "" {
-		incidentID = "UNSPECIFIED"
-	}
-	event := AuditEvent{IncidentID: incidentID, PlanID: c.PlanID, Actor: operator, OperatorIdentity: operator, CapabilityID: c.CapabilityID, EvidenceDigest: c.EvidenceDigest, InstanceID: c.InstanceID, AuthorizationMechanism: "unix-peer+ed25519", Action: "CAPABILITY_VALIDATED", Result: string(result.Decision), Rejection: result.Reason}
+	event := AuditEvent{IncidentID: auditScope(c.IncidentID, c.ModelID), PlanID: c.PlanID, ModelID: c.ModelID, Actor: operator, OperatorIdentity: operator, CapabilityID: c.CapabilityID, EvidenceDigest: c.EvidenceDigest, InstanceID: c.InstanceID, AuthorizationMechanism: "unix-peer+ed25519", Action: "CAPABILITY_VALIDATED", Result: string(result.Decision), Rejection: result.Reason}
 	if event.Actor == "" {
 		event.Actor = "UNVERIFIED"
 	}
@@ -343,7 +378,7 @@ func (s *Service) ReserveCapability(c Capability, operator string, policy Capabi
 		return CapabilityResult{Decision: Replayed, Reason: ErrCapabilityReplay.Error()}, nil
 	}
 	s.capabilities[c.CapabilityID] = capabilityRecord{CapabilityID: c.CapabilityID, Fingerprint: capabilityFingerprint(c), IncidentID: c.IncidentID, PlanID: c.PlanID, EvidenceDigest: c.EvidenceDigest, AllowedOperation: c.AllowedOperation, ReservedAt: time.Now().UTC()}
-	if err := s.appendAuditLocked(AuditEvent{IncidentID: c.IncidentID, PlanID: c.PlanID, Actor: operator, OperatorIdentity: operator, CapabilityID: c.CapabilityID, EvidenceDigest: c.EvidenceDigest, InstanceID: c.InstanceID, AuthorizationMechanism: "unix-peer+ed25519", Action: "CAPABILITY_RESERVED", Result: "RESERVED"}); err != nil {
+	if err := s.appendAuditLocked(AuditEvent{IncidentID: auditScope(c.IncidentID, c.ModelID), PlanID: c.PlanID, ModelID: c.ModelID, Actor: operator, OperatorIdentity: operator, CapabilityID: c.CapabilityID, EvidenceDigest: c.EvidenceDigest, InstanceID: c.InstanceID, AuthorizationMechanism: "unix-peer+ed25519", Action: "CAPABILITY_RESERVED", Result: "RESERVED"}); err != nil {
 		delete(s.capabilities, c.CapabilityID)
 		s.storeError = fmt.Errorf("%w: %v", ErrAuditPersistence, err)
 		return CapabilityResult{Decision: Rejected, Reason: ErrAuditPersistence.Error()}, s.storeError
@@ -375,7 +410,7 @@ func (s *Service) ConsumeCapability(c Capability, operator string, policy Capabi
 	}
 	record.Consumed = true
 	s.capabilities[c.CapabilityID] = record
-	if err := s.appendAuditLocked(AuditEvent{IncidentID: c.IncidentID, PlanID: c.PlanID, Actor: operator, OperatorIdentity: operator, CapabilityID: c.CapabilityID, EvidenceDigest: c.EvidenceDigest, InstanceID: c.InstanceID, AuthorizationMechanism: "unix-peer+ed25519", Action: "CAPABILITY_CONSUMED", Result: "CONSUMED"}); err != nil {
+	if err := s.appendAuditLocked(AuditEvent{IncidentID: auditScope(c.IncidentID, c.ModelID), PlanID: c.PlanID, ModelID: c.ModelID, Actor: operator, OperatorIdentity: operator, CapabilityID: c.CapabilityID, EvidenceDigest: c.EvidenceDigest, InstanceID: c.InstanceID, AuthorizationMechanism: "unix-peer+ed25519", Action: "CAPABILITY_CONSUMED", Result: "CONSUMED"}); err != nil {
 		record.Consumed = false
 		s.capabilities[c.CapabilityID] = record
 		s.storeError = fmt.Errorf("%w: %v", ErrAuditPersistence, err)
@@ -390,6 +425,16 @@ func randomID() (string, error) {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+func auditScope(incidentID, modelID string) string {
+	if strings.TrimSpace(incidentID) != "" {
+		return incidentID
+	}
+	if strings.TrimSpace(modelID) != "" {
+		return "model:" + modelID
+	}
+	return "UNSPECIFIED"
 }
 
 func capabilityFingerprint(c Capability) string {
