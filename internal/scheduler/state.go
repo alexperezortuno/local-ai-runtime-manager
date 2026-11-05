@@ -34,20 +34,30 @@ type LeaseStatus struct {
 }
 
 type Snapshot struct {
-	Active    *Lease     `json:"active,omitempty"`
-	Pending   []Lease    `json:"pending"`
-	Preparing *Lease     `json:"preparing,omitempty"`
-	Residents []Resident `json:"residents,omitempty"`
+	Active        *Lease     `json:"active,omitempty"`
+	Pending       []Lease    `json:"pending"`
+	Preparing     *Lease     `json:"preparing,omitempty"`
+	Residents     []Resident `json:"residents,omitempty"`
+	CapacityUsed  int        `json:"capacity_used"`
+	CapacityLimit int        `json:"capacity_limit"`
 }
 
 type Resident struct {
-	Model             string `json:"model"`
-	State             string `json:"state"`
-	Residency         string `json:"residency"`
-	KeepAlive         bool   `json:"keep_alive"`
-	TimeAlive         string `json:"time_alive"`
-	ProcessInstanceID string `json:"process_instance_id,omitempty"`
-	PID               int    `json:"pid,omitempty"`
+	Model              string `json:"model"`
+	State              string `json:"state"`
+	Residency          string `json:"residency"`
+	KeepAlive          bool   `json:"keep_alive"`
+	TimeAlive          string `json:"time_alive"`
+	ProcessInstanceID  string `json:"process_instance_id,omitempty"`
+	PID                int    `json:"pid,omitempty"`
+	ActiveLeases       int    `json:"active_leases"`
+	ProtectedInference bool   `json:"protected_inference"`
+	ResidenceRemaining string `json:"residence_remaining,omitempty"`
+	CapacityOccupied   bool   `json:"capacity_occupied"`
+	RecoveryState      string `json:"recovery_state,omitempty"`
+	OwnershipStatus    string `json:"ownership_status,omitempty"`
+	PreloadState       string `json:"preload_state,omitempty"`
+	PreloadError       string `json:"preload_error,omitempty"`
 }
 
 // RecoveryRecord is the metadata retained by the LARM-005 idempotency store.
