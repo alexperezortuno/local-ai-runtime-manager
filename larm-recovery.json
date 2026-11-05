@@ -1,0 +1,1300 @@
+{
+  "version": 1,
+  "larm_instance_id": "1b0bf681-8a51-445a-8444-895e9cc86ea5",
+  "clean_shutdown": false,
+  "updated_at": "2026-11-05T02:23:21.327107Z",
+  "records": [
+    {
+      "schema_version": "1",
+      "request_id": "3ee82be8-9e88-4bee-a64a-c9cba3bf7192",
+      "execution_id": "b99365a1-9fbb-477d-92c2-251819dd45f2",
+      "lease_id": "7d7bb434-ff50-4060-a512-a6024bb0d0c6",
+      "model_id": "commit",
+      "process_instance_id": "5be5b5ea-31e7-49cc-9cf9-7f39fb30492a",
+      "process_assignment": "ASSIGNED",
+      "stream": false,
+      "admission_state": "ACCEPTED",
+      "transport_state": "COMPLETED",
+      "semantic_state": "SUCCEEDED",
+      "cancellation_state": "NONE",
+      "created_at": "2026-11-05T01:07:58.093464Z",
+      "updated_at": "2026-11-05T01:08:03.958195Z",
+      "error_class": "NONE",
+      "terminal_evidence_ids": [
+        "b4a03371-b0f5-47d1-adb6-e778ff062401"
+      ],
+      "execution_declared": false,
+      "execution_ownership": "GENERATED_EPHEMERAL",
+      "execution_lifetime": "EPHEMERAL",
+      "process_identity_status": "UNVERIFIED",
+      "observations": [
+        {
+          "type": "REQUEST_CREATED",
+          "observed_at": "2026-11-05T01:07:58.093464Z"
+        },
+        {
+          "type": "REQUEST_ADMITTED",
+          "observed_at": "2026-11-05T01:07:58.110414Z"
+        },
+        {
+          "type": "WAITING_LEASE",
+          "observed_at": "2026-11-05T01:07:58.130689Z"
+        },
+        {
+          "type": "LEASE_ACTIVE",
+          "observed_at": "2026-11-05T01:08:02.976769Z"
+        },
+        {
+          "type": "INFERENCE_STARTED",
+          "observed_at": "2026-11-05T01:08:02.984987Z"
+        },
+        {
+          "type": "UPSTREAM_PREPARING",
+          "observed_at": "2026-11-05T01:08:02.992769Z"
+        },
+        {
+          "type": "BACKEND_CONNECTION_STARTED",
+          "observed_at": "2026-11-05T01:08:03.001028Z"
+        },
+        {
+          "type": "HEADERS_RECEIVED",
+          "observed_at": "2026-11-05T01:08:03.933948Z"
+        },
+        {
+          "type": "BODY_STARTED",
+          "observed_at": "2026-11-05T01:08:03.942227Z"
+        },
+        {
+          "type": "BODY_COMPLETED",
+          "observed_at": "2026-11-05T01:08:03.950022Z"
+        },
+        {
+          "type": "HTTP_COMPLETED",
+          "observed_at": "2026-11-05T01:08:03.958195Z"
+        }
+      ],
+      "terminal_evidence": [
+        {
+          "schema_version": "1",
+          "evidence_id": "b4a03371-b0f5-47d1-adb6-e778ff062401",
+          "subject_kind": "REQUEST",
+          "subject_id": "3ee82be8-9e88-4bee-a64a-c9cba3bf7192",
+          "request_id": "3ee82be8-9e88-4bee-a64a-c9cba3bf7192",
+          "source": "larm-inference-registry",
+          "type": "HTTP_COMPLETED",
+          "observed_at": "2026-11-05T01:08:03.958195Z",
+          "result": "SUCCESS",
+          "correlation_id": "3ee82be8-9e88-4bee-a64a-c9cba3bf7192",
+          "guarantee": "SEMANTIC",
+          "http_status": 200,
+          "eof": true,
+          "transport_terminated": true
+        }
+      ],
+      "recovery_state": "NORMAL",
+      "physical_reconciliation_at": "0001-01-01T00:00:00Z"
+    },
+    {
+      "schema_version": "1",
+      "request_id": "09b7c5f9-b7fe-42ba-93ab-a3d537930752",
+      "execution_id": "ee9d5111-2b2c-4dd3-a6ca-2440975ccc18",
+      "lease_id": "e8139099-b599-4bb3-b9cf-b9ae301de9e6",
+      "model_id": "commit",
+      "process_instance_id": "7a574c3c-ee57-41d1-bfce-7aadafc16364",
+      "process_assignment": "ASSIGNED",
+      "stream": false,
+      "admission_state": "ACCEPTED",
+      "transport_state": "COMPLETED",
+      "semantic_state": "SUCCEEDED",
+      "cancellation_state": "NONE",
+      "created_at": "2026-11-05T01:08:58.596558Z",
+      "updated_at": "2026-11-05T01:09:00.782851Z",
+      "error_class": "NONE",
+      "terminal_evidence_ids": [
+        "fb8f66fd-35b7-4b7c-b786-d098269e3205"
+      ],
+      "execution_declared": false,
+      "execution_ownership": "GENERATED_EPHEMERAL",
+      "execution_lifetime": "EPHEMERAL",
+      "process_identity_status": "UNVERIFIED",
+      "observations": [
+        {
+          "type": "REQUEST_CREATED",
+          "observed_at": "2026-11-05T01:08:58.596558Z"
+        },
+        {
+          "type": "REQUEST_ADMITTED",
+          "observed_at": "2026-11-05T01:08:58.610293Z"
+        },
+        {
+          "type": "WAITING_LEASE",
+          "observed_at": "2026-11-05T01:08:58.620069Z"
+        },
+        {
+          "type": "LEASE_ACTIVE",
+          "observed_at": "2026-11-05T01:08:59.778281Z"
+        },
+        {
+          "type": "INFERENCE_STARTED",
+          "observed_at": "2026-11-05T01:08:59.787451Z"
+        },
+        {
+          "type": "UPSTREAM_PREPARING",
+          "observed_at": "2026-11-05T01:08:59.797338Z"
+        },
+        {
+          "type": "BACKEND_CONNECTION_STARTED",
+          "observed_at": "2026-11-05T01:08:59.807568Z"
+        },
+        {
+          "type": "HEADERS_RECEIVED",
+          "observed_at": "2026-11-05T01:09:00.75799Z"
+        },
+        {
+          "type": "BODY_STARTED",
+          "observed_at": "2026-11-05T01:09:00.766873Z"
+        },
+        {
+          "type": "BODY_COMPLETED",
+          "observed_at": "2026-11-05T01:09:00.774642Z"
+        },
+        {
+          "type": "HTTP_COMPLETED",
+          "observed_at": "2026-11-05T01:09:00.782851Z"
+        }
+      ],
+      "terminal_evidence": [
+        {
+          "schema_version": "1",
+          "evidence_id": "fb8f66fd-35b7-4b7c-b786-d098269e3205",
+          "subject_kind": "REQUEST",
+          "subject_id": "09b7c5f9-b7fe-42ba-93ab-a3d537930752",
+          "request_id": "09b7c5f9-b7fe-42ba-93ab-a3d537930752",
+          "source": "larm-inference-registry",
+          "type": "HTTP_COMPLETED",
+          "observed_at": "2026-11-05T01:09:00.782851Z",
+          "result": "SUCCESS",
+          "correlation_id": "09b7c5f9-b7fe-42ba-93ab-a3d537930752",
+          "guarantee": "SEMANTIC",
+          "http_status": 200,
+          "eof": true,
+          "transport_terminated": true
+        }
+      ],
+      "recovery_state": "NORMAL",
+      "physical_reconciliation_at": "0001-01-01T00:00:00Z"
+    },
+    {
+      "schema_version": "1",
+      "request_id": "09a1c563-005d-4e2c-85d2-5ea065c4e9ee",
+      "execution_id": "9c434be6-a285-4004-bcae-7a7ed98002b9",
+      "lease_id": "3e990e75-163d-4ad7-a35d-7e99581362c9",
+      "model_id": "commit",
+      "process_instance_id": "a20cb34f-5c83-45f6-971d-b7373e3af8c0",
+      "process_assignment": "ASSIGNED",
+      "stream": false,
+      "admission_state": "ACCEPTED",
+      "transport_state": "COMPLETED",
+      "semantic_state": "SUCCEEDED",
+      "cancellation_state": "NONE",
+      "created_at": "2026-11-05T01:09:20.132668Z",
+      "updated_at": "2026-11-05T01:09:22.264771Z",
+      "error_class": "NONE",
+      "terminal_evidence_ids": [
+        "666e3b86-4616-495d-a819-10aa62d31f1f"
+      ],
+      "execution_declared": false,
+      "execution_ownership": "GENERATED_EPHEMERAL",
+      "execution_lifetime": "EPHEMERAL",
+      "process_identity_status": "UNVERIFIED",
+      "observations": [
+        {
+          "type": "REQUEST_CREATED",
+          "observed_at": "2026-11-05T01:09:20.132668Z"
+        },
+        {
+          "type": "REQUEST_ADMITTED",
+          "observed_at": "2026-11-05T01:09:20.14311Z"
+        },
+        {
+          "type": "WAITING_LEASE",
+          "observed_at": "2026-11-05T01:09:20.157815Z"
+        },
+        {
+          "type": "LEASE_ACTIVE",
+          "observed_at": "2026-11-05T01:09:21.320353Z"
+        },
+        {
+          "type": "INFERENCE_STARTED",
+          "observed_at": "2026-11-05T01:09:21.328932Z"
+        },
+        {
+          "type": "UPSTREAM_PREPARING",
+          "observed_at": "2026-11-05T01:09:21.337359Z"
+        },
+        {
+          "type": "BACKEND_CONNECTION_STARTED",
+          "observed_at": "2026-11-05T01:09:21.3461Z"
+        },
+        {
+          "type": "HEADERS_RECEIVED",
+          "observed_at": "2026-11-05T01:09:22.238343Z"
+        },
+        {
+          "type": "BODY_STARTED",
+          "observed_at": "2026-11-05T01:09:22.246916Z"
+        },
+        {
+          "type": "BODY_COMPLETED",
+          "observed_at": "2026-11-05T01:09:22.256302Z"
+        },
+        {
+          "type": "HTTP_COMPLETED",
+          "observed_at": "2026-11-05T01:09:22.264771Z"
+        }
+      ],
+      "terminal_evidence": [
+        {
+          "schema_version": "1",
+          "evidence_id": "666e3b86-4616-495d-a819-10aa62d31f1f",
+          "subject_kind": "REQUEST",
+          "subject_id": "09a1c563-005d-4e2c-85d2-5ea065c4e9ee",
+          "request_id": "09a1c563-005d-4e2c-85d2-5ea065c4e9ee",
+          "source": "larm-inference-registry",
+          "type": "HTTP_COMPLETED",
+          "observed_at": "2026-11-05T01:09:22.264771Z",
+          "result": "SUCCESS",
+          "correlation_id": "09a1c563-005d-4e2c-85d2-5ea065c4e9ee",
+          "guarantee": "SEMANTIC",
+          "http_status": 200,
+          "eof": true,
+          "transport_terminated": true
+        }
+      ],
+      "recovery_state": "NORMAL",
+      "physical_reconciliation_at": "0001-01-01T00:00:00Z"
+    },
+    {
+      "schema_version": "1",
+      "request_id": "a28610c9-4114-44c2-b82f-4ecee7e247df",
+      "execution_id": "284e997b-649f-4a89-ac8f-d966accb4b7e",
+      "lease_id": "29cb96aa-52dc-4308-bce1-750b7642844d",
+      "model_id": "commit",
+      "process_instance_id": "ed9e4fdb-bbe3-4e77-b474-b669b375a232",
+      "process_assignment": "ASSIGNED",
+      "stream": false,
+      "admission_state": "ACCEPTED",
+      "transport_state": "COMPLETED",
+      "semantic_state": "SUCCEEDED",
+      "cancellation_state": "NONE",
+      "created_at": "2026-11-05T01:11:17.094639Z",
+      "updated_at": "2026-11-05T01:11:19.060312Z",
+      "error_class": "NONE",
+      "terminal_evidence_ids": [
+        "449bcbcf-bd68-454e-ae70-490547a8e208"
+      ],
+      "execution_declared": false,
+      "execution_ownership": "GENERATED_EPHEMERAL",
+      "execution_lifetime": "EPHEMERAL",
+      "process_identity_status": "UNVERIFIED",
+      "observations": [
+        {
+          "type": "REQUEST_CREATED",
+          "observed_at": "2026-11-05T01:11:17.094639Z"
+        },
+        {
+          "type": "REQUEST_ADMITTED",
+          "observed_at": "2026-11-05T01:11:17.108548Z"
+        },
+        {
+          "type": "WAITING_LEASE",
+          "observed_at": "2026-11-05T01:11:17.127478Z"
+        },
+        {
+          "type": "LEASE_ACTIVE",
+          "observed_at": "2026-11-05T01:11:18.27524Z"
+        },
+        {
+          "type": "INFERENCE_STARTED",
+          "observed_at": "2026-11-05T01:11:18.285046Z"
+        },
+        {
+          "type": "UPSTREAM_PREPARING",
+          "observed_at": "2026-11-05T01:11:18.295245Z"
+        },
+        {
+          "type": "BACKEND_CONNECTION_STARTED",
+          "observed_at": "2026-11-05T01:11:18.305032Z"
+        },
+        {
+          "type": "HEADERS_RECEIVED",
+          "observed_at": "2026-11-05T01:11:19.031566Z"
+        },
+        {
+          "type": "BODY_STARTED",
+          "observed_at": "2026-11-05T01:11:19.041339Z"
+        },
+        {
+          "type": "BODY_COMPLETED",
+          "observed_at": "2026-11-05T01:11:19.051499Z"
+        },
+        {
+          "type": "HTTP_COMPLETED",
+          "observed_at": "2026-11-05T01:11:19.060312Z"
+        }
+      ],
+      "terminal_evidence": [
+        {
+          "schema_version": "1",
+          "evidence_id": "449bcbcf-bd68-454e-ae70-490547a8e208",
+          "subject_kind": "REQUEST",
+          "subject_id": "a28610c9-4114-44c2-b82f-4ecee7e247df",
+          "request_id": "a28610c9-4114-44c2-b82f-4ecee7e247df",
+          "source": "larm-inference-registry",
+          "type": "HTTP_COMPLETED",
+          "observed_at": "2026-11-05T01:11:19.060312Z",
+          "result": "SUCCESS",
+          "correlation_id": "a28610c9-4114-44c2-b82f-4ecee7e247df",
+          "guarantee": "SEMANTIC",
+          "http_status": 200,
+          "eof": true,
+          "transport_terminated": true
+        }
+      ],
+      "recovery_state": "NORMAL",
+      "physical_reconciliation_at": "0001-01-01T00:00:00Z"
+    },
+    {
+      "schema_version": "1",
+      "request_id": "1d271d64-7872-48a4-b976-7e9b20dcab62",
+      "execution_id": "cca58753-c559-4c26-900d-af8e699f36a2",
+      "lease_id": "e26f9cc4-834a-4b0b-8644-f1519ac81030",
+      "model_id": "commit",
+      "process_instance_id": "897e6d8f-7aba-4330-be11-6abc8da1e041",
+      "process_assignment": "ASSIGNED",
+      "stream": false,
+      "admission_state": "ACCEPTED",
+      "transport_state": "COMPLETED",
+      "semantic_state": "SUCCEEDED",
+      "cancellation_state": "NONE",
+      "created_at": "2026-11-05T01:12:07.816745Z",
+      "updated_at": "2026-11-05T01:12:09.74646Z",
+      "error_class": "NONE",
+      "terminal_evidence_ids": [
+        "1b323a07-7baf-40f1-8f74-5bf7d84d9a18"
+      ],
+      "execution_declared": false,
+      "execution_ownership": "GENERATED_EPHEMERAL",
+      "execution_lifetime": "EPHEMERAL",
+      "process_identity_status": "UNVERIFIED",
+      "observations": [
+        {
+          "type": "REQUEST_CREATED",
+          "observed_at": "2026-11-05T01:12:07.816745Z"
+        },
+        {
+          "type": "REQUEST_ADMITTED",
+          "observed_at": "2026-11-05T01:12:07.837665Z"
+        },
+        {
+          "type": "WAITING_LEASE",
+          "observed_at": "2026-11-05T01:12:07.857584Z"
+        },
+        {
+          "type": "LEASE_ACTIVE",
+          "observed_at": "2026-11-05T01:12:09.008806Z"
+        },
+        {
+          "type": "INFERENCE_STARTED",
+          "observed_at": "2026-11-05T01:12:09.018539Z"
+        },
+        {
+          "type": "UPSTREAM_PREPARING",
+          "observed_at": "2026-11-05T01:12:09.02889Z"
+        },
+        {
+          "type": "BACKEND_CONNECTION_STARTED",
+          "observed_at": "2026-11-05T01:12:09.037624Z"
+        },
+        {
+          "type": "HEADERS_RECEIVED",
+          "observed_at": "2026-11-05T01:12:09.716763Z"
+        },
+        {
+          "type": "BODY_STARTED",
+          "observed_at": "2026-11-05T01:12:09.727567Z"
+        },
+        {
+          "type": "BODY_COMPLETED",
+          "observed_at": "2026-11-05T01:12:09.737943Z"
+        },
+        {
+          "type": "HTTP_COMPLETED",
+          "observed_at": "2026-11-05T01:12:09.74646Z"
+        }
+      ],
+      "terminal_evidence": [
+        {
+          "schema_version": "1",
+          "evidence_id": "1b323a07-7baf-40f1-8f74-5bf7d84d9a18",
+          "subject_kind": "REQUEST",
+          "subject_id": "1d271d64-7872-48a4-b976-7e9b20dcab62",
+          "request_id": "1d271d64-7872-48a4-b976-7e9b20dcab62",
+          "source": "larm-inference-registry",
+          "type": "HTTP_COMPLETED",
+          "observed_at": "2026-11-05T01:12:09.74646Z",
+          "result": "SUCCESS",
+          "correlation_id": "1d271d64-7872-48a4-b976-7e9b20dcab62",
+          "guarantee": "SEMANTIC",
+          "http_status": 200,
+          "eof": true,
+          "transport_terminated": true
+        }
+      ],
+      "recovery_state": "NORMAL",
+      "physical_reconciliation_at": "0001-01-01T00:00:00Z"
+    },
+    {
+      "schema_version": "1",
+      "request_id": "beffa520-182f-48ad-a29c-64f406dc6b3b",
+      "execution_id": "b223973f-4e14-424c-b737-f54165e01a4b",
+      "lease_id": "e5483376-5b58-4604-ad8f-cfceb5646204",
+      "model_id": "commit",
+      "process_instance_id": "b5a95293-78fb-4aa2-8c3e-6b2df49840f1",
+      "process_assignment": "ASSIGNED",
+      "stream": false,
+      "admission_state": "ACCEPTED",
+      "transport_state": "COMPLETED",
+      "semantic_state": "SUCCEEDED",
+      "cancellation_state": "NONE",
+      "created_at": "2026-11-05T01:14:11.285557Z",
+      "updated_at": "2026-11-05T01:14:13.860145Z",
+      "error_class": "NONE",
+      "terminal_evidence_ids": [
+        "7d5c717e-95fb-4de4-ad70-a2f4c79acfd2"
+      ],
+      "execution_declared": false,
+      "execution_ownership": "GENERATED_EPHEMERAL",
+      "execution_lifetime": "EPHEMERAL",
+      "process_identity_status": "UNVERIFIED",
+      "observations": [
+        {
+          "type": "REQUEST_CREATED",
+          "observed_at": "2026-11-05T01:14:11.285557Z"
+        },
+        {
+          "type": "REQUEST_ADMITTED",
+          "observed_at": "2026-11-05T01:14:11.304695Z"
+        },
+        {
+          "type": "WAITING_LEASE",
+          "observed_at": "2026-11-05T01:14:11.326689Z"
+        },
+        {
+          "type": "LEASE_ACTIVE",
+          "observed_at": "2026-11-05T01:14:12.476992Z"
+        },
+        {
+          "type": "INFERENCE_STARTED",
+          "observed_at": "2026-11-05T01:14:12.485624Z"
+        },
+        {
+          "type": "UPSTREAM_PREPARING",
+          "observed_at": "2026-11-05T01:14:12.496021Z"
+        },
+        {
+          "type": "BACKEND_CONNECTION_STARTED",
+          "observed_at": "2026-11-05T01:14:12.506656Z"
+        },
+        {
+          "type": "HEADERS_RECEIVED",
+          "observed_at": "2026-11-05T01:14:13.83055Z"
+        },
+        {
+          "type": "BODY_STARTED",
+          "observed_at": "2026-11-05T01:14:13.841259Z"
+        },
+        {
+          "type": "BODY_COMPLETED",
+          "observed_at": "2026-11-05T01:14:13.8516Z"
+        },
+        {
+          "type": "HTTP_COMPLETED",
+          "observed_at": "2026-11-05T01:14:13.860145Z"
+        }
+      ],
+      "terminal_evidence": [
+        {
+          "schema_version": "1",
+          "evidence_id": "7d5c717e-95fb-4de4-ad70-a2f4c79acfd2",
+          "subject_kind": "REQUEST",
+          "subject_id": "beffa520-182f-48ad-a29c-64f406dc6b3b",
+          "request_id": "beffa520-182f-48ad-a29c-64f406dc6b3b",
+          "source": "larm-inference-registry",
+          "type": "HTTP_COMPLETED",
+          "observed_at": "2026-11-05T01:14:13.860145Z",
+          "result": "SUCCESS",
+          "correlation_id": "beffa520-182f-48ad-a29c-64f406dc6b3b",
+          "guarantee": "SEMANTIC",
+          "http_status": 200,
+          "eof": true,
+          "transport_terminated": true
+        }
+      ],
+      "recovery_state": "NORMAL",
+      "physical_reconciliation_at": "0001-01-01T00:00:00Z"
+    },
+    {
+      "schema_version": "1",
+      "request_id": "d1e08881-0b8f-44e0-9ca2-d2327a4faecb",
+      "execution_id": "27203b26-67c1-4e73-a36b-86cf924605a0",
+      "lease_id": "d6e6ed7b-5976-488f-ba5f-fa9e729b2926",
+      "model_id": "commit",
+      "process_instance_id": "ccedf192-ca5c-41b6-8035-847fb0b56a97",
+      "process_assignment": "ASSIGNED",
+      "stream": false,
+      "admission_state": "ACCEPTED",
+      "transport_state": "COMPLETED",
+      "semantic_state": "SUCCEEDED",
+      "cancellation_state": "NONE",
+      "created_at": "2026-11-05T01:15:38.999702Z",
+      "updated_at": "2026-11-05T01:15:41.550644Z",
+      "error_class": "NONE",
+      "terminal_evidence_ids": [
+        "9207559e-8632-4b2c-a65e-92846d3c56aa"
+      ],
+      "execution_declared": false,
+      "execution_ownership": "GENERATED_EPHEMERAL",
+      "execution_lifetime": "EPHEMERAL",
+      "process_identity_status": "UNVERIFIED",
+      "observations": [
+        {
+          "type": "REQUEST_CREATED",
+          "observed_at": "2026-11-05T01:15:38.999702Z"
+        },
+        {
+          "type": "REQUEST_ADMITTED",
+          "observed_at": "2026-11-05T01:15:39.016824Z"
+        },
+        {
+          "type": "WAITING_LEASE",
+          "observed_at": "2026-11-05T01:15:39.03571Z"
+        },
+        {
+          "type": "LEASE_ACTIVE",
+          "observed_at": "2026-11-05T01:15:40.183149Z"
+        },
+        {
+          "type": "INFERENCE_STARTED",
+          "observed_at": "2026-11-05T01:15:40.192906Z"
+        },
+        {
+          "type": "UPSTREAM_PREPARING",
+          "observed_at": "2026-11-05T01:15:40.20113Z"
+        },
+        {
+          "type": "BACKEND_CONNECTION_STARTED",
+          "observed_at": "2026-11-05T01:15:40.210804Z"
+        },
+        {
+          "type": "HEADERS_RECEIVED",
+          "observed_at": "2026-11-05T01:15:41.525156Z"
+        },
+        {
+          "type": "BODY_STARTED",
+          "observed_at": "2026-11-05T01:15:41.533769Z"
+        },
+        {
+          "type": "BODY_COMPLETED",
+          "observed_at": "2026-11-05T01:15:41.542066Z"
+        },
+        {
+          "type": "HTTP_COMPLETED",
+          "observed_at": "2026-11-05T01:15:41.550644Z"
+        }
+      ],
+      "terminal_evidence": [
+        {
+          "schema_version": "1",
+          "evidence_id": "9207559e-8632-4b2c-a65e-92846d3c56aa",
+          "subject_kind": "REQUEST",
+          "subject_id": "d1e08881-0b8f-44e0-9ca2-d2327a4faecb",
+          "request_id": "d1e08881-0b8f-44e0-9ca2-d2327a4faecb",
+          "source": "larm-inference-registry",
+          "type": "HTTP_COMPLETED",
+          "observed_at": "2026-11-05T01:15:41.550644Z",
+          "result": "SUCCESS",
+          "correlation_id": "d1e08881-0b8f-44e0-9ca2-d2327a4faecb",
+          "guarantee": "SEMANTIC",
+          "http_status": 200,
+          "eof": true,
+          "transport_terminated": true
+        }
+      ],
+      "recovery_state": "NORMAL",
+      "physical_reconciliation_at": "0001-01-01T00:00:00Z"
+    },
+    {
+      "schema_version": "1",
+      "request_id": "3ac09d79-98ef-420d-8a88-66e6fb6a6276",
+      "execution_id": "83cb09cb-24e2-4607-a481-3330e646d280",
+      "lease_id": "31008296-abed-4a3f-bec0-189e80c32f1c",
+      "model_id": "commit",
+      "process_instance_id": "b1d219b0-73ff-4ae0-9d3e-26f4310c8073",
+      "process_assignment": "ASSIGNED",
+      "stream": false,
+      "admission_state": "ACCEPTED",
+      "transport_state": "COMPLETED",
+      "semantic_state": "SUCCEEDED",
+      "cancellation_state": "NONE",
+      "created_at": "2026-11-05T01:57:34.517914Z",
+      "updated_at": "2026-11-05T01:57:37.101325Z",
+      "error_class": "NONE",
+      "terminal_evidence_ids": [
+        "adcbce78-003c-4ff8-84ec-2180d003f078"
+      ],
+      "execution_declared": false,
+      "execution_ownership": "GENERATED_EPHEMERAL",
+      "execution_lifetime": "EPHEMERAL",
+      "process_identity_status": "UNVERIFIED",
+      "observations": [
+        {
+          "type": "REQUEST_CREATED",
+          "observed_at": "2026-11-05T01:57:34.517914Z"
+        },
+        {
+          "type": "REQUEST_ADMITTED",
+          "observed_at": "2026-11-05T01:57:34.536899Z"
+        },
+        {
+          "type": "WAITING_LEASE",
+          "observed_at": "2026-11-05T01:57:34.556771Z"
+        },
+        {
+          "type": "LEASE_ACTIVE",
+          "observed_at": "2026-11-05T01:57:35.711594Z"
+        },
+        {
+          "type": "INFERENCE_STARTED",
+          "observed_at": "2026-11-05T01:57:35.723249Z"
+        },
+        {
+          "type": "UPSTREAM_PREPARING",
+          "observed_at": "2026-11-05T01:57:35.733521Z"
+        },
+        {
+          "type": "BACKEND_CONNECTION_STARTED",
+          "observed_at": "2026-11-05T01:57:35.744183Z"
+        },
+        {
+          "type": "HEADERS_RECEIVED",
+          "observed_at": "2026-11-05T01:57:37.070387Z"
+        },
+        {
+          "type": "BODY_STARTED",
+          "observed_at": "2026-11-05T01:57:37.081432Z"
+        },
+        {
+          "type": "BODY_COMPLETED",
+          "observed_at": "2026-11-05T01:57:37.091791Z"
+        },
+        {
+          "type": "HTTP_COMPLETED",
+          "observed_at": "2026-11-05T01:57:37.101325Z"
+        }
+      ],
+      "terminal_evidence": [
+        {
+          "schema_version": "1",
+          "evidence_id": "adcbce78-003c-4ff8-84ec-2180d003f078",
+          "subject_kind": "REQUEST",
+          "subject_id": "3ac09d79-98ef-420d-8a88-66e6fb6a6276",
+          "request_id": "3ac09d79-98ef-420d-8a88-66e6fb6a6276",
+          "source": "larm-inference-registry",
+          "type": "HTTP_COMPLETED",
+          "observed_at": "2026-11-05T01:57:37.101325Z",
+          "result": "SUCCESS",
+          "correlation_id": "3ac09d79-98ef-420d-8a88-66e6fb6a6276",
+          "guarantee": "SEMANTIC",
+          "http_status": 200,
+          "eof": true,
+          "transport_terminated": true
+        }
+      ],
+      "recovery_state": "NORMAL",
+      "physical_reconciliation_at": "0001-01-01T00:00:00Z"
+    },
+    {
+      "schema_version": "1",
+      "request_id": "cd59e66a-07ef-4638-8e66-5f0e9af572ea",
+      "execution_id": "c7ff4c3b-47f7-4971-afb8-29147a7fb2b7",
+      "lease_id": "ec120b4a-9c18-4e66-a0b7-6aaa98f1f00e",
+      "model_id": "commit",
+      "process_instance_id": "b1d219b0-73ff-4ae0-9d3e-26f4310c8073",
+      "process_assignment": "ASSIGNED",
+      "stream": false,
+      "admission_state": "ACCEPTED",
+      "transport_state": "COMPLETED",
+      "semantic_state": "SUCCEEDED",
+      "cancellation_state": "NONE",
+      "created_at": "2026-11-05T02:22:43.330571Z",
+      "updated_at": "2026-11-05T02:23:21.327062Z",
+      "error_class": "NONE",
+      "terminal_evidence_ids": [
+        "2b101878-59b7-480a-88a2-da7f73b4976a"
+      ],
+      "execution_declared": false,
+      "execution_ownership": "GENERATED_EPHEMERAL",
+      "execution_lifetime": "EPHEMERAL",
+      "process_identity_status": "UNVERIFIED",
+      "observations": [
+        {
+          "type": "REQUEST_CREATED",
+          "observed_at": "2026-11-05T02:22:43.330571Z"
+        },
+        {
+          "type": "REQUEST_ADMITTED",
+          "observed_at": "2026-11-05T02:22:43.347546Z"
+        },
+        {
+          "type": "WAITING_LEASE",
+          "observed_at": "2026-11-05T02:22:43.365597Z"
+        },
+        {
+          "type": "LEASE_ACTIVE",
+          "observed_at": "2026-11-05T02:22:43.375066Z"
+        },
+        {
+          "type": "INFERENCE_STARTED",
+          "observed_at": "2026-11-05T02:22:43.383531Z"
+        },
+        {
+          "type": "UPSTREAM_PREPARING",
+          "observed_at": "2026-11-05T02:22:43.392945Z"
+        },
+        {
+          "type": "BACKEND_CONNECTION_STARTED",
+          "observed_at": "2026-11-05T02:22:43.402465Z"
+        },
+        {
+          "type": "HEADERS_RECEIVED",
+          "observed_at": "2026-11-05T02:23:21.284529Z"
+        },
+        {
+          "type": "BODY_STARTED",
+          "observed_at": "2026-11-05T02:23:21.301656Z"
+        },
+        {
+          "type": "BODY_COMPLETED",
+          "observed_at": "2026-11-05T02:23:21.313356Z"
+        },
+        {
+          "type": "HTTP_COMPLETED",
+          "observed_at": "2026-11-05T02:23:21.327062Z"
+        }
+      ],
+      "terminal_evidence": [
+        {
+          "schema_version": "1",
+          "evidence_id": "2b101878-59b7-480a-88a2-da7f73b4976a",
+          "subject_kind": "REQUEST",
+          "subject_id": "cd59e66a-07ef-4638-8e66-5f0e9af572ea",
+          "request_id": "cd59e66a-07ef-4638-8e66-5f0e9af572ea",
+          "source": "larm-inference-registry",
+          "type": "HTTP_COMPLETED",
+          "observed_at": "2026-11-05T02:23:21.327062Z",
+          "result": "SUCCESS",
+          "correlation_id": "cd59e66a-07ef-4638-8e66-5f0e9af572ea",
+          "guarantee": "SEMANTIC",
+          "http_status": 200,
+          "eof": true,
+          "transport_terminated": true
+        }
+      ],
+      "recovery_state": "NORMAL",
+      "physical_reconciliation_at": "0001-01-01T00:00:00Z"
+    }
+  ],
+  "processes": [
+    {
+      "schema_version": "1",
+      "process_instance_id": "5be5b5ea-31e7-49cc-9cf9-7f39fb30492a",
+      "owner_instance_id": "1b0bf681-8a51-445a-8444-895e9cc86ea5",
+      "larm_instance_id": "1b0bf681-8a51-445a-8444-895e9cc86ea5",
+      "model_id": "commit",
+      "pid": 71535,
+      "pgid": 71535,
+      "executable": "/opt/homebrew/bin/llama-server",
+      "start_identity": "darwin:1793840878:120930:71535",
+      "os_process_start_identity": "darwin:1793840878:120930:71535",
+      "started_at": "2026-11-05T01:07:58.120751Z",
+      "terminated_at": "2026-11-05T01:08:04.103439Z",
+      "config_fingerprint": "sha256:32a087f566b981bdd83d2a43cb4f3e89b232f4d6f0e90b887db405543cbf5510",
+      "state": "TERMINATED_VERIFIED",
+      "process_identity_status": "VERIFIED",
+      "ownership_status": "OWNED_VERIFIED",
+      "termination_status": "TERMINATED_VERIFIED",
+      "termination_signals": [
+        "SIGTERM"
+      ],
+      "signal_requested_by_larm": true,
+      "signal_request_result": "SIGTERM_SENT",
+      "wait_error": "exited_zero",
+      "exit_code": 0,
+      "descendant_status": "VERIFIED_OBSERVED_SCOPE",
+      "readiness_evidence_id": "1e9d8227-b3cc-47bd-a63a-e58df2c3a241",
+      "evidence": [
+        {
+          "schema_version": "1",
+          "evidence_id": "1e9d8227-b3cc-47bd-a63a-e58df2c3a241",
+          "subject_kind": "PROCESS_INSTANCE",
+          "subject_id": "5be5b5ea-31e7-49cc-9cf9-7f39fb30492a",
+          "process_instance_id": "5be5b5ea-31e7-49cc-9cf9-7f39fb30492a",
+          "source": "larm-process-supervisor",
+          "type": "PROCESS_READY",
+          "observed_at": "2026-11-05T01:08:02.959154Z",
+          "result": "SUCCESS",
+          "correlation_id": "5be5b5ea-31e7-49cc-9cf9-7f39fb30492a",
+          "guarantee": "PROCESS_TERMINATION",
+          "process_identity_verified": true
+        },
+        {
+          "schema_version": "1",
+          "evidence_id": "5dbe9a4f-64e1-4738-93f9-83741f319d04",
+          "subject_kind": "PROCESS_INSTANCE",
+          "subject_id": "5be5b5ea-31e7-49cc-9cf9-7f39fb30492a",
+          "process_instance_id": "5be5b5ea-31e7-49cc-9cf9-7f39fb30492a",
+          "source": "larm-process-supervisor",
+          "type": "PROCESS_TERMINATION_VERIFIED",
+          "observed_at": "2026-11-05T01:08:04.154074Z",
+          "result": "SUCCESS",
+          "correlation_id": "5be5b5ea-31e7-49cc-9cf9-7f39fb30492a",
+          "guarantee": "PROCESS_TERMINATION",
+          "transport_terminated": true,
+          "process_absent": true,
+          "process_identity_verified": true
+        }
+      ],
+      "termination_evidence_id": "5dbe9a4f-64e1-4738-93f9-83741f319d04",
+      "updated_at": "2026-11-05T01:08:04.154062Z",
+      "recovery_state": "NORMAL"
+    },
+    {
+      "schema_version": "1",
+      "process_instance_id": "7a574c3c-ee57-41d1-bfce-7aadafc16364",
+      "owner_instance_id": "1b0bf681-8a51-445a-8444-895e9cc86ea5",
+      "larm_instance_id": "1b0bf681-8a51-445a-8444-895e9cc86ea5",
+      "model_id": "commit",
+      "pid": 71993,
+      "pgid": 71993,
+      "executable": "/opt/homebrew/bin/llama-server",
+      "start_identity": "darwin:1793840938:628578:71993",
+      "os_process_start_identity": "darwin:1793840938:628578:71993",
+      "started_at": "2026-11-05T01:08:58.628389Z",
+      "terminated_at": "2026-11-05T01:09:00.925176Z",
+      "config_fingerprint": "sha256:32a087f566b981bdd83d2a43cb4f3e89b232f4d6f0e90b887db405543cbf5510",
+      "state": "TERMINATED_VERIFIED",
+      "process_identity_status": "VERIFIED",
+      "ownership_status": "OWNED_VERIFIED",
+      "termination_status": "TERMINATED_VERIFIED",
+      "termination_signals": [
+        "SIGTERM"
+      ],
+      "signal_requested_by_larm": true,
+      "signal_request_result": "SIGTERM_SENT",
+      "wait_error": "exited_zero",
+      "exit_code": 0,
+      "descendant_status": "VERIFIED_OBSERVED_SCOPE",
+      "readiness_evidence_id": "12e87571-1491-407e-83e0-10c11c72c3af",
+      "evidence": [
+        {
+          "schema_version": "1",
+          "evidence_id": "12e87571-1491-407e-83e0-10c11c72c3af",
+          "subject_kind": "PROCESS_INSTANCE",
+          "subject_id": "7a574c3c-ee57-41d1-bfce-7aadafc16364",
+          "process_instance_id": "7a574c3c-ee57-41d1-bfce-7aadafc16364",
+          "source": "larm-process-supervisor",
+          "type": "PROCESS_READY",
+          "observed_at": "2026-11-05T01:08:59.757359Z",
+          "result": "SUCCESS",
+          "correlation_id": "7a574c3c-ee57-41d1-bfce-7aadafc16364",
+          "guarantee": "PROCESS_TERMINATION",
+          "process_identity_verified": true
+        },
+        {
+          "schema_version": "1",
+          "evidence_id": "f8e3afcb-7205-4199-a461-901f2bfa8fc5",
+          "subject_kind": "PROCESS_INSTANCE",
+          "subject_id": "7a574c3c-ee57-41d1-bfce-7aadafc16364",
+          "process_instance_id": "7a574c3c-ee57-41d1-bfce-7aadafc16364",
+          "source": "larm-process-supervisor",
+          "type": "PROCESS_TERMINATION_VERIFIED",
+          "observed_at": "2026-11-05T01:09:00.974701Z",
+          "result": "SUCCESS",
+          "correlation_id": "7a574c3c-ee57-41d1-bfce-7aadafc16364",
+          "guarantee": "PROCESS_TERMINATION",
+          "transport_terminated": true,
+          "process_absent": true,
+          "process_identity_verified": true
+        }
+      ],
+      "termination_evidence_id": "f8e3afcb-7205-4199-a461-901f2bfa8fc5",
+      "updated_at": "2026-11-05T01:09:00.974693Z",
+      "recovery_state": "NORMAL"
+    },
+    {
+      "schema_version": "1",
+      "process_instance_id": "a20cb34f-5c83-45f6-971d-b7373e3af8c0",
+      "owner_instance_id": "1b0bf681-8a51-445a-8444-895e9cc86ea5",
+      "larm_instance_id": "1b0bf681-8a51-445a-8444-895e9cc86ea5",
+      "model_id": "commit",
+      "pid": 72049,
+      "pgid": 72049,
+      "executable": "/opt/homebrew/bin/llama-server",
+      "start_identity": "darwin:1793840960:176014:72049",
+      "os_process_start_identity": "darwin:1793840960:176014:72049",
+      "started_at": "2026-11-05T01:09:20.17583Z",
+      "terminated_at": "2026-11-05T01:09:22.521548Z",
+      "config_fingerprint": "sha256:32a087f566b981bdd83d2a43cb4f3e89b232f4d6f0e90b887db405543cbf5510",
+      "state": "TERMINATED_VERIFIED",
+      "process_identity_status": "VERIFIED",
+      "ownership_status": "OWNED_VERIFIED",
+      "termination_status": "TERMINATED_VERIFIED",
+      "termination_signals": [
+        "SIGTERM"
+      ],
+      "signal_requested_by_larm": true,
+      "signal_request_result": "SIGTERM_SENT",
+      "wait_error": "exited_zero",
+      "exit_code": 0,
+      "descendant_status": "VERIFIED_OBSERVED_SCOPE",
+      "readiness_evidence_id": "a2d4a705-ffb1-4fcc-a305-d6628c20fc1c",
+      "evidence": [
+        {
+          "schema_version": "1",
+          "evidence_id": "a2d4a705-ffb1-4fcc-a305-d6628c20fc1c",
+          "subject_kind": "PROCESS_INSTANCE",
+          "subject_id": "a20cb34f-5c83-45f6-971d-b7373e3af8c0",
+          "process_instance_id": "a20cb34f-5c83-45f6-971d-b7373e3af8c0",
+          "source": "larm-process-supervisor",
+          "type": "PROCESS_READY",
+          "observed_at": "2026-11-05T01:09:21.296372Z",
+          "result": "SUCCESS",
+          "correlation_id": "a20cb34f-5c83-45f6-971d-b7373e3af8c0",
+          "guarantee": "PROCESS_TERMINATION",
+          "process_identity_verified": true
+        },
+        {
+          "schema_version": "1",
+          "evidence_id": "0b6edb83-b55d-4cbe-ad13-f8c51384c394",
+          "subject_kind": "PROCESS_INSTANCE",
+          "subject_id": "a20cb34f-5c83-45f6-971d-b7373e3af8c0",
+          "process_instance_id": "a20cb34f-5c83-45f6-971d-b7373e3af8c0",
+          "source": "larm-process-supervisor",
+          "type": "PROCESS_TERMINATION_VERIFIED",
+          "observed_at": "2026-11-05T01:09:22.575145Z",
+          "result": "SUCCESS",
+          "correlation_id": "a20cb34f-5c83-45f6-971d-b7373e3af8c0",
+          "guarantee": "PROCESS_TERMINATION",
+          "transport_terminated": true,
+          "process_absent": true,
+          "process_identity_verified": true
+        }
+      ],
+      "termination_evidence_id": "0b6edb83-b55d-4cbe-ad13-f8c51384c394",
+      "updated_at": "2026-11-05T01:09:22.575133Z",
+      "recovery_state": "NORMAL"
+    },
+    {
+      "schema_version": "1",
+      "process_instance_id": "ed9e4fdb-bbe3-4e77-b474-b669b375a232",
+      "owner_instance_id": "1b0bf681-8a51-445a-8444-895e9cc86ea5",
+      "larm_instance_id": "1b0bf681-8a51-445a-8444-895e9cc86ea5",
+      "model_id": "commit",
+      "pid": 72274,
+      "pgid": 72274,
+      "executable": "/opt/homebrew/bin/llama-server",
+      "start_identity": "darwin:1793841077:118040:72274",
+      "os_process_start_identity": "darwin:1793841077:118040:72274",
+      "started_at": "2026-11-05T01:11:17.117843Z",
+      "terminated_at": "2026-11-05T01:11:19.209537Z",
+      "config_fingerprint": "sha256:32a087f566b981bdd83d2a43cb4f3e89b232f4d6f0e90b887db405543cbf5510",
+      "state": "TERMINATED_VERIFIED",
+      "process_identity_status": "VERIFIED",
+      "ownership_status": "OWNED_VERIFIED",
+      "termination_status": "TERMINATED_VERIFIED",
+      "termination_signals": [
+        "SIGTERM"
+      ],
+      "signal_requested_by_larm": true,
+      "signal_request_result": "SIGTERM_SENT",
+      "wait_error": "exited_zero",
+      "exit_code": 0,
+      "descendant_status": "VERIFIED_OBSERVED_SCOPE",
+      "readiness_evidence_id": "38509806-e219-4089-b8fb-7c2f04b4e52e",
+      "evidence": [
+        {
+          "schema_version": "1",
+          "evidence_id": "38509806-e219-4089-b8fb-7c2f04b4e52e",
+          "subject_kind": "PROCESS_INSTANCE",
+          "subject_id": "ed9e4fdb-bbe3-4e77-b474-b669b375a232",
+          "process_instance_id": "ed9e4fdb-bbe3-4e77-b474-b669b375a232",
+          "source": "larm-process-supervisor",
+          "type": "PROCESS_READY",
+          "observed_at": "2026-11-05T01:11:18.255207Z",
+          "result": "SUCCESS",
+          "correlation_id": "ed9e4fdb-bbe3-4e77-b474-b669b375a232",
+          "guarantee": "PROCESS_TERMINATION",
+          "process_identity_verified": true
+        },
+        {
+          "schema_version": "1",
+          "evidence_id": "8ead4b00-aeed-43ba-b8c2-40ebea352920",
+          "subject_kind": "PROCESS_INSTANCE",
+          "subject_id": "ed9e4fdb-bbe3-4e77-b474-b669b375a232",
+          "process_instance_id": "ed9e4fdb-bbe3-4e77-b474-b669b375a232",
+          "source": "larm-process-supervisor",
+          "type": "PROCESS_TERMINATION_VERIFIED",
+          "observed_at": "2026-11-05T01:11:19.260345Z",
+          "result": "SUCCESS",
+          "correlation_id": "ed9e4fdb-bbe3-4e77-b474-b669b375a232",
+          "guarantee": "PROCESS_TERMINATION",
+          "transport_terminated": true,
+          "process_absent": true,
+          "process_identity_verified": true
+        }
+      ],
+      "termination_evidence_id": "8ead4b00-aeed-43ba-b8c2-40ebea352920",
+      "updated_at": "2026-11-05T01:11:19.260335Z",
+      "recovery_state": "NORMAL"
+    },
+    {
+      "schema_version": "1",
+      "process_instance_id": "897e6d8f-7aba-4330-be11-6abc8da1e041",
+      "owner_instance_id": "1b0bf681-8a51-445a-8444-895e9cc86ea5",
+      "larm_instance_id": "1b0bf681-8a51-445a-8444-895e9cc86ea5",
+      "model_id": "commit",
+      "pid": 72368,
+      "pgid": 72368,
+      "executable": "/opt/homebrew/bin/llama-server",
+      "start_identity": "darwin:1793841127:849242:72368",
+      "os_process_start_identity": "darwin:1793841127:849242:72368",
+      "started_at": "2026-11-05T01:12:07.849045Z",
+      "terminated_at": "2026-11-05T01:12:09.918527Z",
+      "config_fingerprint": "sha256:32a087f566b981bdd83d2a43cb4f3e89b232f4d6f0e90b887db405543cbf5510",
+      "state": "TERMINATED_VERIFIED",
+      "process_identity_status": "VERIFIED",
+      "ownership_status": "OWNED_VERIFIED",
+      "termination_status": "TERMINATED_VERIFIED",
+      "termination_signals": [
+        "SIGTERM"
+      ],
+      "signal_requested_by_larm": true,
+      "signal_request_result": "SIGTERM_SENT",
+      "wait_error": "exited_zero",
+      "exit_code": 0,
+      "descendant_status": "VERIFIED_OBSERVED_SCOPE",
+      "readiness_evidence_id": "69dc292c-057c-4a71-9da4-0e4fa930cd45",
+      "evidence": [
+        {
+          "schema_version": "1",
+          "evidence_id": "69dc292c-057c-4a71-9da4-0e4fa930cd45",
+          "subject_kind": "PROCESS_INSTANCE",
+          "subject_id": "897e6d8f-7aba-4330-be11-6abc8da1e041",
+          "process_instance_id": "897e6d8f-7aba-4330-be11-6abc8da1e041",
+          "source": "larm-process-supervisor",
+          "type": "PROCESS_READY",
+          "observed_at": "2026-11-05T01:12:08.988458Z",
+          "result": "SUCCESS",
+          "correlation_id": "897e6d8f-7aba-4330-be11-6abc8da1e041",
+          "guarantee": "PROCESS_TERMINATION",
+          "process_identity_verified": true
+        },
+        {
+          "schema_version": "1",
+          "evidence_id": "4399ad8b-fec7-47dc-908f-0c814dc2747d",
+          "subject_kind": "PROCESS_INSTANCE",
+          "subject_id": "897e6d8f-7aba-4330-be11-6abc8da1e041",
+          "process_instance_id": "897e6d8f-7aba-4330-be11-6abc8da1e041",
+          "source": "larm-process-supervisor",
+          "type": "PROCESS_TERMINATION_VERIFIED",
+          "observed_at": "2026-11-05T01:12:09.979644Z",
+          "result": "SUCCESS",
+          "correlation_id": "897e6d8f-7aba-4330-be11-6abc8da1e041",
+          "guarantee": "PROCESS_TERMINATION",
+          "transport_terminated": true,
+          "process_absent": true,
+          "process_identity_verified": true
+        }
+      ],
+      "termination_evidence_id": "4399ad8b-fec7-47dc-908f-0c814dc2747d",
+      "updated_at": "2026-11-05T01:12:09.979632Z",
+      "recovery_state": "NORMAL"
+    },
+    {
+      "schema_version": "1",
+      "process_instance_id": "b5a95293-78fb-4aa2-8c3e-6b2df49840f1",
+      "owner_instance_id": "1b0bf681-8a51-445a-8444-895e9cc86ea5",
+      "larm_instance_id": "1b0bf681-8a51-445a-8444-895e9cc86ea5",
+      "model_id": "commit",
+      "pid": 72553,
+      "pgid": 72553,
+      "executable": "/opt/homebrew/bin/llama-server",
+      "start_identity": "darwin:1793841251:318271:72553",
+      "os_process_start_identity": "darwin:1793841251:318271:72553",
+      "started_at": "2026-11-05T01:14:11.318081Z",
+      "terminated_at": "2026-11-05T01:14:14.010393Z",
+      "config_fingerprint": "sha256:32a087f566b981bdd83d2a43cb4f3e89b232f4d6f0e90b887db405543cbf5510",
+      "state": "TERMINATED_VERIFIED",
+      "process_identity_status": "VERIFIED",
+      "ownership_status": "OWNED_VERIFIED",
+      "termination_status": "TERMINATED_VERIFIED",
+      "termination_signals": [
+        "SIGTERM"
+      ],
+      "signal_requested_by_larm": true,
+      "signal_request_result": "SIGTERM_SENT",
+      "wait_error": "exited_zero",
+      "exit_code": 0,
+      "descendant_status": "VERIFIED_OBSERVED_SCOPE",
+      "readiness_evidence_id": "4eea4c8b-7b17-498b-bc4c-65f58d3548fb",
+      "evidence": [
+        {
+          "schema_version": "1",
+          "evidence_id": "4eea4c8b-7b17-498b-bc4c-65f58d3548fb",
+          "subject_kind": "PROCESS_INSTANCE",
+          "subject_id": "b5a95293-78fb-4aa2-8c3e-6b2df49840f1",
+          "process_instance_id": "b5a95293-78fb-4aa2-8c3e-6b2df49840f1",
+          "source": "larm-process-supervisor",
+          "type": "PROCESS_READY",
+          "observed_at": "2026-11-05T01:14:12.455712Z",
+          "result": "SUCCESS",
+          "correlation_id": "b5a95293-78fb-4aa2-8c3e-6b2df49840f1",
+          "guarantee": "PROCESS_TERMINATION",
+          "process_identity_verified": true
+        },
+        {
+          "schema_version": "1",
+          "evidence_id": "befbfb93-9797-4a08-9c8b-9349082704a7",
+          "subject_kind": "PROCESS_INSTANCE",
+          "subject_id": "b5a95293-78fb-4aa2-8c3e-6b2df49840f1",
+          "process_instance_id": "b5a95293-78fb-4aa2-8c3e-6b2df49840f1",
+          "source": "larm-process-supervisor",
+          "type": "PROCESS_TERMINATION_VERIFIED",
+          "observed_at": "2026-11-05T01:14:14.068339Z",
+          "result": "SUCCESS",
+          "correlation_id": "b5a95293-78fb-4aa2-8c3e-6b2df49840f1",
+          "guarantee": "PROCESS_TERMINATION",
+          "transport_terminated": true,
+          "process_absent": true,
+          "process_identity_verified": true
+        }
+      ],
+      "termination_evidence_id": "befbfb93-9797-4a08-9c8b-9349082704a7",
+      "updated_at": "2026-11-05T01:14:14.068329Z",
+      "recovery_state": "NORMAL"
+    },
+    {
+      "schema_version": "1",
+      "process_instance_id": "ccedf192-ca5c-41b6-8035-847fb0b56a97",
+      "owner_instance_id": "1b0bf681-8a51-445a-8444-895e9cc86ea5",
+      "larm_instance_id": "1b0bf681-8a51-445a-8444-895e9cc86ea5",
+      "model_id": "commit",
+      "pid": 72705,
+      "pgid": 72705,
+      "executable": "/opt/homebrew/bin/llama-server",
+      "start_identity": "darwin:1793841339:26266:72705",
+      "os_process_start_identity": "darwin:1793841339:26266:72705",
+      "started_at": "2026-11-05T01:15:39.026089Z",
+      "terminated_at": "2026-11-05T01:15:41.693971Z",
+      "config_fingerprint": "sha256:32a087f566b981bdd83d2a43cb4f3e89b232f4d6f0e90b887db405543cbf5510",
+      "state": "TERMINATED_VERIFIED",
+      "process_identity_status": "VERIFIED",
+      "ownership_status": "OWNED_VERIFIED",
+      "termination_status": "TERMINATED_VERIFIED",
+      "termination_signals": [
+        "SIGTERM"
+      ],
+      "signal_requested_by_larm": true,
+      "signal_request_result": "SIGTERM_SENT",
+      "wait_error": "exited_zero",
+      "exit_code": 0,
+      "descendant_status": "VERIFIED_OBSERVED_SCOPE",
+      "readiness_evidence_id": "497c5110-e29d-4cc4-b369-f51ba0664d66",
+      "evidence": [
+        {
+          "schema_version": "1",
+          "evidence_id": "497c5110-e29d-4cc4-b369-f51ba0664d66",
+          "subject_kind": "PROCESS_INSTANCE",
+          "subject_id": "ccedf192-ca5c-41b6-8035-847fb0b56a97",
+          "process_instance_id": "ccedf192-ca5c-41b6-8035-847fb0b56a97",
+          "source": "larm-process-supervisor",
+          "type": "PROCESS_READY",
+          "observed_at": "2026-11-05T01:15:40.163461Z",
+          "result": "SUCCESS",
+          "correlation_id": "ccedf192-ca5c-41b6-8035-847fb0b56a97",
+          "guarantee": "PROCESS_TERMINATION",
+          "process_identity_verified": true
+        },
+        {
+          "schema_version": "1",
+          "evidence_id": "cadbe249-c762-4a17-aacf-447b578e1d35",
+          "subject_kind": "PROCESS_INSTANCE",
+          "subject_id": "ccedf192-ca5c-41b6-8035-847fb0b56a97",
+          "process_instance_id": "ccedf192-ca5c-41b6-8035-847fb0b56a97",
+          "source": "larm-process-supervisor",
+          "type": "PROCESS_TERMINATION_VERIFIED",
+          "observed_at": "2026-11-05T01:15:41.744466Z",
+          "result": "SUCCESS",
+          "correlation_id": "ccedf192-ca5c-41b6-8035-847fb0b56a97",
+          "guarantee": "PROCESS_TERMINATION",
+          "transport_terminated": true,
+          "process_absent": true,
+          "process_identity_verified": true
+        }
+      ],
+      "termination_evidence_id": "cadbe249-c762-4a17-aacf-447b578e1d35",
+      "updated_at": "2026-11-05T01:15:41.744454Z",
+      "recovery_state": "NORMAL"
+    },
+    {
+      "schema_version": "1",
+      "process_instance_id": "b1d219b0-73ff-4ae0-9d3e-26f4310c8073",
+      "owner_instance_id": "1b0bf681-8a51-445a-8444-895e9cc86ea5",
+      "larm_instance_id": "1b0bf681-8a51-445a-8444-895e9cc86ea5",
+      "model_id": "commit",
+      "pid": 91482,
+      "pgid": 91482,
+      "executable": "/opt/homebrew/bin/llama-server",
+      "start_identity": "darwin:1793843854:547480:91482",
+      "os_process_start_identity": "darwin:1793843854:547480:91482",
+      "started_at": "2026-11-05T01:57:34.547251Z",
+      "terminated_at": "0001-01-01T00:00:00Z",
+      "config_fingerprint": "sha256:32a087f566b981bdd83d2a43cb4f3e89b232f4d6f0e90b887db405543cbf5510",
+      "state": "READY",
+      "process_identity_status": "VERIFIED",
+      "ownership_status": "OWNED_VERIFIED",
+      "termination_status": "NOT_REQUESTED",
+      "descendant_status": "SUPERVISED_GROUP",
+      "readiness_evidence_id": "48fc26ed-02ce-455a-96a5-32b71ddb3b8b",
+      "evidence": [
+        {
+          "schema_version": "1",
+          "evidence_id": "48fc26ed-02ce-455a-96a5-32b71ddb3b8b",
+          "subject_kind": "PROCESS_INSTANCE",
+          "subject_id": "b1d219b0-73ff-4ae0-9d3e-26f4310c8073",
+          "process_instance_id": "b1d219b0-73ff-4ae0-9d3e-26f4310c8073",
+          "source": "larm-process-supervisor",
+          "type": "PROCESS_READY",
+          "observed_at": "2026-11-05T01:57:35.689716Z",
+          "result": "SUCCESS",
+          "correlation_id": "b1d219b0-73ff-4ae0-9d3e-26f4310c8073",
+          "guarantee": "PROCESS_TERMINATION",
+          "process_identity_verified": true
+        }
+      ],
+      "updated_at": "2026-11-05T01:57:35.689716Z",
+      "recovery_state": "NORMAL"
+    }
+  ]
+}
