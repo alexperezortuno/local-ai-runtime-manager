@@ -53,7 +53,7 @@ models:
     reasoning: "off"
     keep_alive: false
     # keep_alive/time_alive also request one automatic background preload at startup.
-     time_alive: "10m"
+    time_alive: "10m"
     extra_args:
       - "--jinja"
 
