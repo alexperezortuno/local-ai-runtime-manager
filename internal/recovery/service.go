@@ -252,6 +252,10 @@ type ProcessReconciler interface {
 	ReconcileProcess(context.Context, ProcessReconciliationRequest) error
 }
 
+type runtimeRecoveryAuthority interface {
+	SchedulerRecoveryReady() error
+}
+
 func Open(registry *inference.Registry, sched *scheduler.Scheduler, path string, providers ...ProcessProvider) (*Service, error) {
 	if registry == nil || path == "" {
 		return nil, errors.New("recovery service requires registry and path")
@@ -299,7 +303,43 @@ func Open(registry *inference.Registry, sched *scheduler.Scheduler, path string,
 	if err := s.Refresh(); err != nil {
 		return nil, err
 	}
+	if err := s.recoverEmptySchedulerStore(); err != nil {
+		return nil, err
+	}
 	return s, nil
+}
+
+// recoverEmptySchedulerStore is the narrow, cross-authority recovery path for
+// a stale dirty marker with no durable acquisition state. It does not resolve
+// leases, processes, incidents, or inference records.
+func (s *Service) recoverEmptySchedulerStore() error {
+	if s.scheduler == nil || s.processes == nil {
+		return nil
+	}
+	diagnostics := s.scheduler.RecoveryDiagnostics()
+	if !diagnostics.RecoveryBlocked || diagnostics.CleanShutdown || len(diagnostics.Records) != 0 {
+		return nil
+	}
+	status := s.registry.RecoveryStatus()
+	if s.startupDirty || status.CleanShutdown == false || status.RecoveryRequired || !status.AdmissionAllowed || status.PendingInferenceCount != 0 || status.ProtectedLeaseCount != 0 || status.JournalError != "" {
+		return nil
+	}
+	for _, incident := range s.incidents {
+		if incident.Status != StatusResolved {
+			return nil
+		}
+	}
+	authority, ok := s.processes.(runtimeRecoveryAuthority)
+	if !ok {
+		return nil
+	}
+	if err := authority.SchedulerRecoveryReady(); err != nil {
+		return nil
+	}
+	if err := s.scheduler.RecoverEmptyStore(); err != nil {
+		return fmt.Errorf("recover empty scheduler store: %w", err)
+	}
+	return nil
 }
 
 func (s *Service) Incidents() ([]Incident, error) {

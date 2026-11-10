@@ -797,6 +797,30 @@ func (m *Manager) RecoveryRequired() (bool, string) {
 	return m.recovery, m.recoveryReason
 }
 
+// SchedulerRecoveryReady is the Runtime authority's attestation for clearing
+// an otherwise empty Scheduler dirty marker. It never adopts historical state.
+func (m *Manager) SchedulerRecoveryReady() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.recovery {
+		return ErrRecoveryRequired
+	}
+	if m.proc != nil || len(m.procs) != 0 {
+		return errors.New("runtime still owns a model process")
+	}
+	for _, state := range m.modelStates {
+		if state != Stopped {
+			return errors.New("runtime model is still transitioning")
+		}
+	}
+	for _, instance := range m.processes {
+		if instance.State != corecontract.ProcessTerminatedVerified && instance.State != corecontract.ProcessFailed {
+			return errors.New("runtime process evidence is incomplete")
+		}
+	}
+	return nil
+}
+
 func (m *Manager) Status() Status {
 	m.mu.Lock()
 	defer m.mu.Unlock()

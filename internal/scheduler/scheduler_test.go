@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -407,6 +408,53 @@ func TestIdempotencyStoreRestartRequiresRecoveryAndNeverRecreates(t *testing.T) 
 	}
 	if _, _, err := restarted.RequestIdempotent("f2f8d7ef-b335-4404-b72c-5b2c08a36116", "model-1"); err != ErrIdempotencyRecovery {
 		t.Fatalf("new keyed acquisition was not blocked during recovery: %v", err)
+	}
+}
+
+func TestEmptyDirtyIdempotencyStoreRequiresAttestedRecovery(t *testing.T) {
+	manager, original, store := testSchedulerWithStore(t, "normal", 1, time.Second, time.Second, 5, 2*time.Second, 100*time.Millisecond, true)
+	shutdownScheduler(t, original)
+	if err := os.WriteFile(store, []byte(`{"version":1,"clean_shutdown":false,"records":{},"reconciliations":{}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := NewWithIdempotencyStore(manager, config.SchedulerConfig{MaxQueueSize: 5, LeaseTTL: "2s", Heartbeat: "100ms", MaxLease: "20s"}, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { shutdownScheduler(t, restarted) })
+	if _, err := restarted.Request("model-1"); err != ErrIdempotencyRecovery {
+		t.Fatalf("dirty empty store was not blocked before attestation: %v", err)
+	}
+	restarted.idempotencyFault = func(point string) error {
+		if point == "before_persist" {
+			return errors.New("injected persistence failure")
+		}
+		return nil
+	}
+	if err := restarted.RecoverEmptyStore(); err == nil {
+		t.Fatal("recovery succeeded without durable persistence")
+	}
+	if !restarted.RecoveryDiagnostics().RecoveryBlocked {
+		t.Fatal("persistence failure released the scheduler gate")
+	}
+	restarted.idempotencyFault = nil
+	if err := restarted.RecoverEmptyStore(); err != nil {
+		t.Fatal(err)
+	}
+	var file idempotencyFile
+	data, err := os.ReadFile(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &file); err != nil {
+		t.Fatal(err)
+	}
+	if !file.CleanShutdown {
+		t.Fatal("empty-store recovery was not persisted as clean")
+	}
+	lease, err := restarted.Request("model-1")
+	if err != nil || lease.ID == "" {
+		t.Fatalf("attested empty-store acquisition = %+v, err=%v", lease, err)
 	}
 }
 

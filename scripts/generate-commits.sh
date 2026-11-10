@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-API="http://127.0.0.1:8069/v1/chat/completions"
+API="http://127.0.0.1:8060/v1/chat/completions"
 MODEL="commit"
 
 while IFS= read -r -d '' file; do

@@ -207,6 +207,7 @@ func (s *Scheduler) openIdempotencyStore(path string) error {
 		s.cleanShutdown = file.CleanShutdown
 		if !file.CleanShutdown {
 			s.recoveryBlocked = true
+			s.uncleanStoreRecovery = true
 		}
 		for key, record := range file.Records {
 			normalized, keyErr := normalizeIdempotencyKey(key)

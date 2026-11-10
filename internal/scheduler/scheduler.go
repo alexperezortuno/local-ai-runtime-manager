@@ -30,49 +30,50 @@ var (
 )
 
 type Scheduler struct {
-	mu                 sync.Mutex
-	manager            *runtime.Manager
-	maxQueue           int
-	ttl                time.Duration
-	heartbeat          time.Duration
-	maxLease           time.Duration
-	leases             map[string]*Lease
-	queue              leaseQueue
-	activeID           string
-	preparingID        string
-	operationCancel    context.CancelFunc
-	preloadQueue       []string
-	preloadingID       string
-	preloadCancel      context.CancelFunc
-	preloadState       map[string]string
-	preloadError       map[string]string
-	preloadSuppressed  map[string]bool
-	manual             []manualCommand
-	manualBusy         bool
-	manualModel        bool
-	unloadWhenIdle     bool
-	unloadModel        string
-	residenceTimers    map[string]*time.Timer
-	residenceDue       map[string]uint64
-	residenceGen       map[string]uint64
-	residenceDeadlines map[string]time.Time
-	inferences         map[string]map[uint64]inferencePin
-	nextInferenceID    uint64
-	changedMu          sync.Mutex
-	changed            chan struct{}
-	closing            bool
-	ctx                context.Context
-	cancel             context.CancelFunc
-	wake               chan struct{}
-	done               chan struct{}
-	closeOnce          sync.Once
-	idempotencyPath    string
-	idempotency        map[string]idempotencyRecord
-	reconciliations    map[string]reconciliationRecord
-	recoveryBlocked    bool
-	cleanShutdown      bool
-	releaseProtector   ReleaseProtector
-	admissionGate      AdmissionGate
+	mu                   sync.Mutex
+	manager              *runtime.Manager
+	maxQueue             int
+	ttl                  time.Duration
+	heartbeat            time.Duration
+	maxLease             time.Duration
+	leases               map[string]*Lease
+	queue                leaseQueue
+	activeID             string
+	preparingID          string
+	operationCancel      context.CancelFunc
+	preloadQueue         []string
+	preloadingID         string
+	preloadCancel        context.CancelFunc
+	preloadState         map[string]string
+	preloadError         map[string]string
+	preloadSuppressed    map[string]bool
+	manual               []manualCommand
+	manualBusy           bool
+	manualModel          bool
+	unloadWhenIdle       bool
+	unloadModel          string
+	residenceTimers      map[string]*time.Timer
+	residenceDue         map[string]uint64
+	residenceGen         map[string]uint64
+	residenceDeadlines   map[string]time.Time
+	inferences           map[string]map[uint64]inferencePin
+	nextInferenceID      uint64
+	changedMu            sync.Mutex
+	changed              chan struct{}
+	closing              bool
+	ctx                  context.Context
+	cancel               context.CancelFunc
+	wake                 chan struct{}
+	done                 chan struct{}
+	closeOnce            sync.Once
+	idempotencyPath      string
+	idempotency          map[string]idempotencyRecord
+	reconciliations      map[string]reconciliationRecord
+	recoveryBlocked      bool
+	uncleanStoreRecovery bool
+	cleanShutdown        bool
+	releaseProtector     ReleaseProtector
+	admissionGate        AdmissionGate
 	// idempotencyFault is a package-local test seam. Production never sets it;
 	// it lets persistence tests fail at an explicit durable-store boundary.
 	idempotencyFault func(string) error
@@ -226,6 +227,25 @@ func (s *Scheduler) SetAdmissionGate(gate AdmissionGate) {
 	s.mu.Lock()
 	s.admissionGate = gate
 	s.mu.Unlock()
+}
+
+// RecoverEmptyStore clears only the startup dirty marker when the durable
+// scheduler store contains no acquisition or reconciliation state. Recovery
+// must validate the other authorities before calling this method.
+func (s *Scheduler) RecoverEmptyStore() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.uncleanStoreRecovery || s.cleanShutdown || !s.recoveryBlocked || len(s.idempotency) != 0 || len(s.reconciliations) != 0 || len(s.leases) != 0 || len(s.queue) != 0 || s.activeID != "" || s.preparingID != "" || len(s.inferences) != 0 {
+		return ErrIdempotencyRecovery
+	}
+	previousBlocked, previousUnclean, previousClean := s.recoveryBlocked, s.uncleanStoreRecovery, s.cleanShutdown
+	s.recoveryBlocked, s.uncleanStoreRecovery, s.cleanShutdown = false, false, true
+	if err := s.writeIdempotencyLocked(); err != nil {
+		s.recoveryBlocked, s.uncleanStoreRecovery, s.cleanShutdown = previousBlocked, previousUnclean, previousClean
+		return err
+	}
+	s.notify()
+	return nil
 }
 
 // WaitActive waits for an automatically queued lease to become usable.
