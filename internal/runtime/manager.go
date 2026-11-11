@@ -15,6 +15,7 @@ import (
 	"local-ai-runtime/internal/backend"
 	"local-ai-runtime/internal/config"
 	"local-ai-runtime/internal/corecontract"
+	"local-ai-runtime/internal/memory"
 	"local-ai-runtime/internal/models"
 )
 
@@ -49,6 +50,7 @@ type Manager struct {
 	recoveryReason string
 	stopDone       chan struct{}
 	stopErr        error
+	observer       *memory.Observer
 }
 
 func NewManager(cfg config.Config, journals ...ProcessJournal) *Manager {
@@ -89,6 +91,8 @@ func NewManager(cfg config.Config, journals ...ProcessJournal) *Manager {
 	if m.ownerID == "" {
 		m.ownerID, _ = corecontract.NewID()
 	}
+	m.observer = memory.NewDefaultObserver(m.observationProcesses)
+	m.observer.Start(m.ctx)
 	return m
 }
 
@@ -761,6 +765,20 @@ func (m *Manager) ProcessInstance(id string) (corecontract.ProcessInstance, bool
 	return instance, ok
 }
 
+func (m *Manager) observationProcesses() []memory.ProcessRef {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	result := make([]memory.ProcessRef, 0, len(m.procs))
+	for id, process := range m.procs {
+		instance, ok := m.modelProcessLocked(id)
+		if !ok || process == nil {
+			continue
+		}
+		result = append(result, memory.ProcessRef{ModelID: id, PID: process.identity.PID, ProcessInstanceID: instance.ProcessInstanceID, StartIdentity: instance.StartIdentity, RuntimeState: string(m.modelStates[id]), OwnershipStatus: instance.OwnershipStatus})
+	}
+	return result
+}
+
 func (m *Manager) CurrentProcess() (corecontract.ProcessInstance, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -823,7 +841,6 @@ func (m *Manager) SchedulerRecoveryReady() error {
 
 func (m *Manager) Status() Status {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	s := Status{Runtime: m.config.Backend, State: m.state, ActiveModel: m.active, RecoveryRequired: m.recovery, RecoveryReason: m.recoveryReason}
 	if s.ActiveModel == "" {
 		for id := range m.procs {
@@ -845,12 +862,34 @@ func (m *Manager) Status() Status {
 			s.UptimeSeconds = int64(time.Since(m.startedModels[s.ActiveModel]).Seconds())
 		}
 	}
+	m.mu.Unlock()
+	if m.observer != nil {
+		s.Memory = m.currentMemorySnapshot(m.observer.Snapshot())
+	}
 	return s
+}
+
+func (m *Manager) currentMemorySnapshot(snapshot memory.Snapshot) memory.Snapshot {
+	m.mu.Lock()
+	active := make(map[string]struct{}, len(m.procs))
+	for id, process := range m.procs {
+		if instance, ok := m.modelProcessLocked(id); ok && process != nil {
+			active[instance.ProcessInstanceID] = struct{}{}
+		}
+	}
+	m.mu.Unlock()
+	filtered := snapshot.Processes[:0]
+	for _, process := range snapshot.Processes {
+		if _, ok := active[process.ProcessInstanceID]; ok {
+			filtered = append(filtered, process)
+		}
+	}
+	snapshot.Processes = filtered
+	return snapshot
 }
 
 func (m *Manager) Models() map[string]ModelStatus {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	result := make(map[string]ModelStatus)
 	for id, model := range m.registry.List() {
 		state := m.modelStates[id]
@@ -877,33 +916,54 @@ func (m *Manager) Models() map[string]ModelStatus {
 		status.CapacityOccupied = status.PID != 0 || state == Starting || state == Stopping
 		result[id] = status
 	}
+	m.mu.Unlock()
+	if m.observer != nil {
+		snapshot := m.observer.Snapshot()
+		for id, status := range result {
+			if status.ProcessInstanceID == "" {
+				continue
+			}
+			status.Memory = &memory.ProcessMemory{ModelID: id, PID: status.PID, ProcessInstanceID: status.ProcessInstanceID, RuntimeState: string(status.State), Status: memory.Unavailable, GPUStatus: memory.Unavailable, Source: "larm-memory-observer", Reason: "snapshot_not_available"}
+			for _, process := range snapshot.Processes {
+				if process.ModelID == id && process.ProcessInstanceID == status.ProcessInstanceID {
+					status.Memory = &process
+					result[id] = status
+					break
+				}
+			}
+		}
+	}
 	return result
 }
 
 type ModelStatus struct {
-	ID                    string `json:"id"`
-	Path                  string `json:"-"`
-	Port                  int    `json:"port"`
-	State                 State  `json:"state"`
-	PID                   int    `json:"pid,omitempty"`
-	ProcessInstanceID     string `json:"process_instance_id,omitempty"`
-	KeepAlive             bool   `json:"keep_alive"`
-	TimeAlive             string `json:"time_alive"`
-	Residency             string `json:"residency,omitempty"`
-	ActiveLeases          int    `json:"active_leases"`
-	ProtectedInference    bool   `json:"protected_inference"`
-	ResidenceRemaining    string `json:"residence_remaining,omitempty"`
-	CapacityOccupied      bool   `json:"capacity_occupied"`
-	RecoveryState         string `json:"recovery_state"`
-	OwnershipStatus       string `json:"ownership_status,omitempty"`
-	ProcessIdentityStatus string `json:"process_identity_status,omitempty"`
-	TerminationStatus     string `json:"termination_status,omitempty"`
-	PreloadState          string `json:"preload_state,omitempty"`
-	PreloadError          string `json:"preload_error,omitempty"`
+	ID                    string                `json:"id"`
+	Path                  string                `json:"-"`
+	Port                  int                   `json:"port"`
+	State                 State                 `json:"state"`
+	PID                   int                   `json:"pid,omitempty"`
+	ProcessInstanceID     string                `json:"process_instance_id,omitempty"`
+	KeepAlive             bool                  `json:"keep_alive"`
+	TimeAlive             string                `json:"time_alive"`
+	Residency             string                `json:"residency,omitempty"`
+	ActiveLeases          int                   `json:"active_leases"`
+	ProtectedInference    bool                  `json:"protected_inference"`
+	ResidenceRemaining    string                `json:"residence_remaining,omitempty"`
+	CapacityOccupied      bool                  `json:"capacity_occupied"`
+	RecoveryState         string                `json:"recovery_state"`
+	OwnershipStatus       string                `json:"ownership_status,omitempty"`
+	ProcessIdentityStatus string                `json:"process_identity_status,omitempty"`
+	TerminationStatus     string                `json:"termination_status,omitempty"`
+	PreloadState          string                `json:"preload_state,omitempty"`
+	PreloadError          string                `json:"preload_error,omitempty"`
+	Memory                *memory.ProcessMemory `json:"memory,omitempty"`
 }
 
 func (m *Manager) Shutdown(ctx context.Context) error {
 	m.cancel()
+	if m.observer != nil {
+		_ = m.observer.Stop(ctx)
+	}
 	m.mu.Lock()
 	ids := make([]string, 0, len(m.procs))
 	for id := range m.procs {

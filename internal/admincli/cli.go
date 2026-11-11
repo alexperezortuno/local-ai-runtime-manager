@@ -215,7 +215,7 @@ func renderModels(w io.Writer, value any) error {
 	if !ok {
 		return errors.New("LARM returned an unexpected models response")
 	}
-	fmt.Fprintln(w, "MODEL\tSTATE\tRESIDENCY\tPRELOAD\tPID\tPROCESS_INSTANCE_ID\tLEASES\tPROTECTED\tCAPACITY")
+	fmt.Fprintln(w, "MODEL\tSTATE\tRESIDENCY\tPRELOAD\tPID\tPROCESS_INSTANCE_ID\tLEASES\tPROTECTED\tCAPACITY\tRSS_BYTES\tPRIVATE_BYTES\tMEMORY_STATUS")
 	for _, raw := range models {
 		model, ok := raw.(map[string]any)
 		if !ok {
@@ -256,7 +256,11 @@ func renderModels(w io.Writer, value any) error {
 		if boolValue(model["capacity_occupied"]) {
 			capacity = "occupied"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", id, state, residency, preload, pid, instance, stringValue(model["active_leases"]), protected, capacity)
+		rss, private, memoryStatus := "-", "-", "-"
+		if observed, ok := model["memory"].(map[string]any); ok {
+			rss, private, memoryStatus = byteValue(observed["rss_bytes"]), byteValue(observed["private_bytes"]), stringValue(observed["status"])
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", id, state, residency, preload, pid, instance, stringValue(model["active_leases"]), protected, capacity, rss, private, memoryStatus)
 	}
 	return nil
 }
@@ -289,6 +293,22 @@ func renderStatus(w io.Writer, value any) error {
 	fmt.Fprintf(w, "CAPACITY\t%s/%s\n", resident, stringValue(scheduler["capacity_limit"]))
 	fmt.Fprintf(w, "QUEUED\t%s\n", stringValue(root["queued_requests"]))
 	fmt.Fprintf(w, "RECOVERY\t%s\n", recovery)
+	if observed, ok := root["memory"].(map[string]any); ok {
+		system, _ := observed["system"].(map[string]any)
+		fmt.Fprintf(w, "RAM_TOTAL_BYTES\t%s\n", byteValue(system["total_bytes"]))
+		fmt.Fprintf(w, "RAM_AVAILABLE_BYTES\t%s\n", byteValue(system["available_bytes"]))
+		fmt.Fprintf(w, "SWAP_USED_BYTES\t%s\n", byteValue(system["swap_used_bytes"]))
+		fmt.Fprintf(w, "MEMORY_STATUS\t%s\n", stringValue(observed["status"]))
+		fmt.Fprintf(w, "MEMORY_MEASURED_AT\t%s\n", stringValue(observed["measured_at"]))
+		if gpus, ok := observed["gpus"].([]any); ok && len(gpus) > 0 {
+			gpu, _ := gpus[0].(map[string]any)
+			fmt.Fprintf(w, "GPU\t%s\n", stringValue(gpu["name"]))
+			fmt.Fprintf(w, "GPU_FREE_BYTES\t%s\n", byteValue(gpu["free_bytes"]))
+		} else {
+			fmt.Fprintln(w, "GPU\t-")
+			fmt.Fprintln(w, "GPU_FREE_BYTES\t-")
+		}
+	}
 	return nil
 }
 
@@ -338,6 +358,13 @@ func stringValue(value any) string {
 	default:
 		return ""
 	}
+}
+
+func byteValue(value any) string {
+	if value == nil {
+		return "-"
+	}
+	return stringValue(value)
 }
 
 func boolValue(value any) bool {
@@ -395,6 +422,7 @@ func doctor(configPath string, client *client, stdout, stderr io.Writer) int {
 	_, healthErr := client.get("/health")
 	checks = append(checks, checkServerPort(cfg, healthErr))
 	checks = append(checks, checkDirectories(cfg)...)
+	checks = append(checks, checkObservability(client)...)
 	if cfg.Scheduler.MaxActiveModels > 0 {
 		checks = append(checks, doctorCheck{"CAPACITY", "PASS", fmt.Sprintf("max_active_models=%d", cfg.Scheduler.MaxActiveModels)})
 	} else {
@@ -418,6 +446,47 @@ func doctor(configPath string, client *client, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+func checkObservability(client *client) []doctorCheck {
+	value, err := client.get("/api/v1/status")
+	if err != nil {
+		return []doctorCheck{
+			{"MEMORY_PROVIDER", "WARN", "status snapshot unavailable"},
+			{"PROCESS_MEMORY", "WARN", "process metrics could not be checked"},
+			{"GPU_PROVIDER", "PASS", "GPU provider not checked while service is unavailable"},
+		}
+	}
+	root, _ := value.(map[string]any)
+	memoryValue, _ := root["memory"].(map[string]any)
+	system, _ := memoryValue["system"].(map[string]any)
+	systemStatus := stringValue(system["status"])
+	checks := []doctorCheck{{"MEMORY_PROVIDER", "PASS", "system memory provider is " + systemStatus}}
+	if systemStatus == "UNAVAILABLE" || systemStatus == "PARTIAL" || systemStatus == "STALE" || systemStatus == "" {
+		checks[0].result, checks[0].detail = "WARN", "system memory metrics are unavailable or stale"
+	}
+	processResult := doctorCheck{"PROCESS_MEMORY", "PASS", "managed process metrics are available or no process is active"}
+	if processes, ok := memoryValue["processes"].([]any); ok {
+		for _, raw := range processes {
+			process, _ := raw.(map[string]any)
+			status := stringValue(process["status"])
+			if status == "UNAVAILABLE" || status == "STALE" || status == "" {
+				processResult.result, processResult.detail = "WARN", "one or more managed process metrics are unavailable or stale"
+				break
+			}
+		}
+	}
+	checks = append(checks, processResult)
+	gpuProvider, _ := memoryValue["gpu_provider"].(map[string]any)
+	gpuStatus := stringValue(gpuProvider["status"])
+	gpuResult := doctorCheck{"GPU_PROVIDER", "PASS", "GPU provider is " + gpuStatus}
+	if gpuStatus == "UNAVAILABLE" || gpuStatus == "PARTIAL" {
+		gpuResult.result, gpuResult.detail = "WARN", "optional GPU provider is unavailable or partial"
+	}
+	if gpuStatus == "" || gpuStatus == "ABSENT" {
+		gpuResult.detail = "no NVIDIA GPU provider detected; optional"
+	}
+	return append(checks, gpuResult)
 }
 
 func checkModelPorts(cfg config.Config) []doctorCheck {
