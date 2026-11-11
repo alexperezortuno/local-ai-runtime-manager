@@ -3,7 +3,6 @@
 package memory
 
 /*
-#cgo LDFLAGS: -lproc
 #include <libproc.h>
 #include <mach/mach.h>
 #include <mach/mach_host.h>
