@@ -22,12 +22,22 @@ type Config struct {
 	Models    map[string]ModelConfig `yaml:"models"`
 }
 
-// CapacityConfig controls only the dry-run memory estimate. It never affects
-// admission, scheduling, residency, or runtime lifecycle decisions.
+// CapacityConfig controls read-only capacity analysis. Admission is deliberately
+// disabled by default and is not wired into Scheduler in this release.
 type CapacityConfig struct {
-	ShadowMode          bool    `yaml:"shadow_mode"`
-	SystemMarginPercent float64 `yaml:"system_margin_percent"`
-	GPUMarginPercent    float64 `yaml:"gpu_margin_percent"`
+	ShadowMode          bool            `yaml:"shadow_mode"`
+	SystemMarginPercent float64         `yaml:"system_margin_percent"`
+	GPUMarginPercent    float64         `yaml:"gpu_margin_percent"`
+	Admission           AdmissionConfig `yaml:"admission"`
+}
+
+type AdmissionConfig struct {
+	Enabled              bool   `yaml:"enabled"`
+	OnInsufficient       string `yaml:"on_insufficient"`
+	OnUnknown            string `yaml:"on_unknown"`
+	WaitTimeout          string `yaml:"wait_timeout"`
+	ReevaluationInterval string `yaml:"reevaluation_interval"`
+	MaxSnapshotAge       string `yaml:"max_snapshot_age"`
 }
 
 type ProxyConfig struct {
@@ -117,6 +127,37 @@ func (c *Config) Validate() error {
 	}
 	if c.Capacity.GPUMarginPercent < 0 || c.Capacity.GPUMarginPercent >= 100 {
 		return fmt.Errorf("capacity.gpu_margin_percent must be between 0 and 100")
+	}
+	if c.Capacity.Admission.OnInsufficient == "" {
+		c.Capacity.Admission.OnInsufficient = "wait"
+	}
+	if c.Capacity.Admission.OnUnknown == "" {
+		c.Capacity.Admission.OnUnknown = "allow"
+	}
+	if c.Capacity.Admission.OnInsufficient != "wait" && c.Capacity.Admission.OnInsufficient != "reject" {
+		return fmt.Errorf("capacity.admission.on_insufficient must be wait or reject")
+	}
+	if c.Capacity.Admission.OnUnknown != "allow" && c.Capacity.Admission.OnUnknown != "wait" && c.Capacity.Admission.OnUnknown != "reject" {
+		return fmt.Errorf("capacity.admission.on_unknown must be allow, wait or reject")
+	}
+	if c.Capacity.Admission.WaitTimeout == "" {
+		c.Capacity.Admission.WaitTimeout = "5m"
+	}
+	if c.Capacity.Admission.ReevaluationInterval == "" {
+		c.Capacity.Admission.ReevaluationInterval = "2s"
+	}
+	if c.Capacity.Admission.MaxSnapshotAge == "" {
+		c.Capacity.Admission.MaxSnapshotAge = "6s"
+	}
+	for name, value := range map[string]string{
+		"wait_timeout":          c.Capacity.Admission.WaitTimeout,
+		"reevaluation_interval": c.Capacity.Admission.ReevaluationInterval,
+		"max_snapshot_age":      c.Capacity.Admission.MaxSnapshotAge,
+	} {
+		d, err := time.ParseDuration(value)
+		if err != nil || d <= 0 {
+			return fmt.Errorf("capacity.admission.%s must be a positive duration", name)
+		}
 	}
 	if c.Proxy.QueueWaitTimeout == "" {
 		c.Proxy.QueueWaitTimeout = "5m"
@@ -339,6 +380,21 @@ func (p ProxyConfig) ConnectDuration() time.Duration {
 
 func (p ProxyConfig) StreamIdleDuration() time.Duration {
 	d, _ := time.ParseDuration(p.StreamIdleTimeout)
+	return d
+}
+
+func (a AdmissionConfig) WaitDuration() time.Duration {
+	d, _ := time.ParseDuration(a.WaitTimeout)
+	return d
+}
+
+func (a AdmissionConfig) ReevaluationDuration() time.Duration {
+	d, _ := time.ParseDuration(a.ReevaluationInterval)
+	return d
+}
+
+func (a AdmissionConfig) SnapshotAgeDuration() time.Duration {
+	d, _ := time.ParseDuration(a.MaxSnapshotAge)
 	return d
 }
 

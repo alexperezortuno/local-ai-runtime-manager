@@ -92,6 +92,50 @@ func TestLoadRejectsMissingBinary(t *testing.T) {
 	}
 }
 
+func TestLoadAdmissionDefaultsDisabled(t *testing.T) {
+	dir := t.TempDir()
+	model := filepath.Join(dir, "model.gguf")
+	binary := filepath.Join(dir, "llama-server")
+	_ = os.WriteFile(model, []byte("model"), 0600)
+	_ = os.WriteFile(binary, []byte("binary"), 0755)
+	path := filepath.Join(dir, "models.yaml")
+	content := strings.Replace(validYAML(model), "/test/llama-server", binary, 1)
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admission := cfg.Capacity.Admission
+	if admission.Enabled || admission.OnInsufficient != "wait" || admission.OnUnknown != "allow" || admission.WaitDuration().String() != "5m0s" || admission.ReevaluationDuration().String() != "2s" || admission.SnapshotAgeDuration().String() != "6s" {
+		t.Fatalf("admission defaults = %+v", admission)
+	}
+}
+
+func TestLoadRejectsAdmissionEnumsAndDurations(t *testing.T) {
+	dir := t.TempDir()
+	model := filepath.Join(dir, "model.gguf")
+	binary := filepath.Join(dir, "llama-server")
+	_ = os.WriteFile(model, []byte("model"), 0600)
+	_ = os.WriteFile(binary, []byte("binary"), 0755)
+	for _, admission := range []string{
+		"on_unknown: sometimes",
+		"on_insufficient: later",
+		"wait_timeout: never",
+	} {
+		path := filepath.Join(dir, "invalid.yaml")
+		content := strings.Replace(validYAML(model), "/test/llama-server", binary, 1)
+		content = strings.Replace(content, "top_p: 0.9", "top_p: 0.9\ncapacity:\n  admission:\n    "+admission, 1)
+		if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := Load(path); err == nil {
+			t.Fatalf("accepted invalid admission value %q", admission)
+		}
+	}
+}
+
 func validYAML(modelPath string) string {
 	return "runtime:\n  binary: /test/llama-server\nmodels:\n  test:\n    path: " + modelPath + "\n    port: 18069\n    context: 4096\n    batch: 512\n    ubatch: 128\n    gpu_layers: all\n    parallel: 1\n    top_p: 0.9\n"
 }
