@@ -74,6 +74,7 @@ type Scheduler struct {
 	cleanShutdown        bool
 	releaseProtector     ReleaseProtector
 	admissionGate        AdmissionGate
+	admissionObserver    AdmissionObserver
 	// idempotencyFault is a package-local test seam. Production never sets it;
 	// it lets persistence tests fail at an explicit durable-store boundary.
 	idempotencyFault func(string) error
@@ -89,6 +90,13 @@ type ReleaseProtector interface {
 // only component that owns queue and lease transitions.
 type AdmissionGate interface {
 	AdmissionBlocked() bool
+}
+
+// AdmissionObserver receives a non-authoritative admission observation. The
+// scheduler never waits for it and never uses its result.
+type AdmissionObserver interface {
+	// ObserveAdmission must only enqueue/copy data and return promptly.
+	ObserveAdmission(requestID, model, operation string)
 }
 
 type inferencePin struct {
@@ -154,6 +162,13 @@ func newScheduler(manager *runtime.Manager, cfg config.SchedulerConfig) *Schedul
 }
 
 func (s *Scheduler) Request(model string) (Lease, error) {
+	return s.RequestWithRequestID("", model)
+}
+
+// RequestWithRequestID preserves a caller's request correlation when the
+// request is known (for example, an automatic inference). Empty IDs use the
+// generated lease ID, which is the stable correlation for lease requests.
+func (s *Scheduler) RequestWithRequestID(requestID, model string) (Lease, error) {
 	if _, ok := s.manager.Models()[model]; !ok {
 		return Lease{}, fmt.Errorf("%w: model %s", ErrNotFound, model)
 	}
@@ -162,23 +177,28 @@ func (s *Scheduler) Request(model string) (Lease, error) {
 		return Lease{}, err
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closing {
+		s.mu.Unlock()
 		return Lease{}, ErrClosed
 	}
 	if s.recoveryBlocked {
+		s.mu.Unlock()
 		return Lease{}, ErrIdempotencyRecovery
 	}
 	if blocked, _ := s.manager.RecoveryRequired(); blocked {
+		s.mu.Unlock()
 		return Lease{}, ErrIdempotencyRecovery
 	}
 	if s.admissionGate != nil && s.admissionGate.AdmissionBlocked() {
+		s.mu.Unlock()
 		return Lease{}, ErrIdempotencyRecovery
 	}
 	if len(s.queue) >= s.maxQueue {
+		s.mu.Unlock()
 		return Lease{}, ErrQueueFull
 	}
 	if err := s.markDirtyLocked(); err != nil {
+		s.mu.Unlock()
 		return Lease{}, fmt.Errorf("persist scheduler activity: %w", err)
 	}
 	if s.preloadSuppressed[model] {
@@ -190,11 +210,21 @@ func (s *Scheduler) Request(model string) (Lease, error) {
 		s.preloadCancel()
 	}
 	l := &Lease{ID: id, Model: model, State: Queued, CreatedAt: time.Now().UTC()}
+	operation := s.admissionOperationLocked(model)
 	s.cancelResidenceLocked(model)
 	s.leases[id] = l
 	s.queue.push(id)
+	result := cloneLease(*l)
+	observer := s.admissionObserver
+	if requestID == "" {
+		requestID = id
+	}
+	if observer != nil {
+		observer.ObserveAdmission(requestID, model, operation)
+	}
 	s.notify()
-	return cloneLease(*l), nil
+	s.mu.Unlock()
+	return result, nil
 }
 
 func (s *Scheduler) Get(id string) (LeaseStatus, error) {
@@ -227,6 +257,22 @@ func (s *Scheduler) SetAdmissionGate(gate AdmissionGate) {
 	s.mu.Lock()
 	s.admissionGate = gate
 	s.mu.Unlock()
+}
+
+func (s *Scheduler) SetAdmissionObserver(observer AdmissionObserver) {
+	s.mu.Lock()
+	s.admissionObserver = observer
+	s.mu.Unlock()
+}
+
+func (s *Scheduler) admissionOperationLocked(model string) string {
+	if s.activeID != "" || s.preparingID != "" || len(s.queue) != 0 {
+		return "QUEUED"
+	}
+	if status, ok := s.manager.Models()[model]; ok && status.State == runtime.Ready && status.PID != 0 {
+		return "RESIDENT_REUSE"
+	}
+	return "NEW_LOAD"
 }
 
 // RecoverEmptyStore clears only the startup dirty marker when the durable

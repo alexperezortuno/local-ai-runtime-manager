@@ -30,6 +30,7 @@ const (
 )
 
 type Options struct {
+	ShadowMode          bool
 	SystemMarginPercent float64
 	GPUMarginPercent    float64
 }
@@ -112,7 +113,7 @@ type Estimate struct {
 
 func (p *Planner) Plan(ctx context.Context, modelID string) Result {
 	snapshot := p.snapshot()
-	result := Result{Verdict: Unknown, ModelID: modelID, Snapshot: snapshot, Limitations: []string{
+	result := Result{Verdict: Unknown, ModelID: modelID, Snapshot: snapshot, Estimate: Estimate{SystemMarginPercent: p.options.SystemMarginPercent, GPUMarginPercent: p.options.GPUMarginPercent}, Limitations: []string{
 		"estimación conservadora; no equivale al consumo exacto de llama.cpp",
 		"available_bytes/free_bytes son observaciones puntuales y pueden cambiar después de la consulta",
 		"RSS de procesos no se suma: la disponibilidad del sistema ya refleja presión global y RSS puede ser compartido",
@@ -124,7 +125,7 @@ func (p *Planner) Plan(ctx context.Context, modelID string) Result {
 	}
 	info, err := os.Stat(model.Path)
 	if err != nil || !info.Mode().IsRegular() {
-		result.Justification = []string{fmt.Sprintf("archivo GGUF no disponible: %v", err)}
+		result.Justification = []string{"archivo GGUF no disponible"}
 		return result
 	}
 	metadata, metadataErr := readGGUFMetadata(model.Path)

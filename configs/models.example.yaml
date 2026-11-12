@@ -17,6 +17,7 @@ scheduler:
 
 # Dry-run only: these margins never reject requests or change Scheduler state.
 capacity:
+  shadow_mode: true
   system_margin_percent: 10
   gpu_margin_percent: 10
 

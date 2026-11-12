@@ -86,6 +86,7 @@ func (s *Scheduler) RequestIdempotent(key, model string) (LeaseStatus, bool, err
 	}
 	now := time.Now().UTC()
 	l := Lease{ID: id, Model: model, State: Queued, CreatedAt: now}
+	operation := s.admissionOperationLocked(model)
 	wasClean := s.cleanShutdown
 	s.cleanShutdown = false
 	s.idempotency[key] = idempotencyRecord{Key: key, Fingerprint: fingerprint, Lease: l, CreatedAt: now, UpdatedAt: now}
@@ -96,6 +97,9 @@ func (s *Scheduler) RequestIdempotent(key, model string) (LeaseStatus, bool, err
 	}
 	s.leases[id] = &l
 	s.queue.push(id)
+	if observer := s.admissionObserver; observer != nil {
+		observer.ObserveAdmission(id, model, operation)
+	}
 	s.notify()
 	return s.statusLocked(&l), false, nil
 }

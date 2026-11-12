@@ -47,10 +47,10 @@ func run(args []string, stdout, stderr io.Writer, readOnly bool) int {
 	flags.SetOutput(stderr)
 	flags.Usage = func() {
 		if readOnly {
-			_, _ = fmt.Fprintln(stderr, "usage: larm [-config PATH] [-url URL] [-timeout DURATION] <models|status|queue|capacity MODEL|doctor>")
+			_, _ = fmt.Fprintln(stderr, "usage: larm [-config PATH] [-url URL] [-timeout DURATION] <models|status|queue|capacity MODEL|capacity-evaluations|doctor>")
 			return
 		}
-		_, _ = fmt.Fprintln(stderr, "usage: larm admin [-url URL] [-socket PATH] [-private-key PATH] [-capability-file PATH] [-out PATH] [-timeout DURATION] <models|status|queue|capacity MODEL|incidents|incident|plan|processes|auth|model|recovery>")
+		_, _ = fmt.Fprintln(stderr, "usage: larm admin [-url URL] [-socket PATH] [-private-key PATH] [-capability-file PATH] [-out PATH] [-timeout DURATION] <models|status|queue|capacity MODEL|capacity-evaluations|incidents|incident|plan|processes|auth|model|recovery>")
 	}
 	endpoint := defaultURL
 	if value := strings.TrimSpace(os.Getenv("LARM_ADMIN_URL")); value != "" {
@@ -104,6 +104,11 @@ func run(args []string, stdout, stderr io.Writer, readOnly bool) int {
 			return usageError(stderr, "capacity requires a model-id")
 		}
 		value, err = client.get("/api/v1/capacity/" + url.PathEscape(command[1]))
+	case "capacity-evaluations":
+		if len(command) != 1 {
+			return usageError(stderr, "capacity-evaluations does not accept arguments")
+		}
+		value, err = client.get("/api/v1/capacity/evaluations")
 	case "doctor":
 		if !readOnly {
 			return usageError(stderr, "unknown administrative command \"doctor\"")
@@ -208,6 +213,11 @@ func run(args []string, stdout, stderr io.Writer, readOnly bool) int {
 		case "capacity":
 			if err := writeJSON(stdout, value); err != nil {
 				_, _ = fmt.Fprintf(stderr, "larm: render capacity: %v\n", err)
+				return 1
+			}
+		case "capacity-evaluations":
+			if err := writeJSON(stdout, value); err != nil {
+				_, _ = fmt.Fprintf(stderr, "larm: render capacity evaluations: %v\n", err)
 				return 1
 			}
 		}

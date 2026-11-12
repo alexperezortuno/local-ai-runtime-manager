@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"local-ai-runtime/internal/capacity"
 	"local-ai-runtime/internal/config"
 	"local-ai-runtime/internal/inference"
 	runtime "local-ai-runtime/internal/runtime"
@@ -196,6 +197,41 @@ func TestLeaseHTTPFlowAndLegacyStatus(t *testing.T) {
 	if bad.StatusCode != http.StatusNotFound {
 		t.Fatalf("unknown model status = %d", bad.StatusCode)
 	}
+}
+
+func TestShadowCapacityEvaluationsAPI(t *testing.T) {
+	manager, sched := apiTestScheduler(t)
+	handler := NewHandlerWithCapacity(manager, sched, config.ProxyConfig{}, capacity.Options{ShadowMode: true})
+	if closer, ok := handler.(interface{ Close() error }); ok {
+		t.Cleanup(func() { _ = closer.Close() })
+	}
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	response, err := server.Client().Post(server.URL+"/api/v1/leases", "application/json", strings.NewReader(`{"model":"model-1"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusAccepted {
+		t.Fatalf("lease status = %d", response.StatusCode)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		response, err = server.Client().Get(server.URL + "/api/v1/capacity/evaluations")
+		if err == nil {
+			var evaluations []map[string]any
+			decodeErr := json.NewDecoder(response.Body).Decode(&evaluations)
+			_ = response.Body.Close()
+			if decodeErr == nil && len(evaluations) > 0 {
+				if evaluations[0]["request_id"] == nil || evaluations[0]["model_id"] != "model-1" || evaluations[0]["operation"] != "NEW_LOAD" || evaluations[0]["verdict"] != "UNKNOWN" {
+					t.Fatalf("evaluation = %+v", evaluations[0])
+				}
+				return
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("timed out waiting for shadow evaluation API")
 }
 
 func TestModelsJSONOmitsFilesystemPathAndKeepsInternalConfiguration(t *testing.T) {

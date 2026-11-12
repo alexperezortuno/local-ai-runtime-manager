@@ -168,7 +168,7 @@ func (h *Handler) serveInference(w http.ResponseWriter, r *http.Request, path st
 		return nil
 	}
 	if automatic {
-		lease, err := h.scheduler.Request(request.Model)
+		lease, err := h.scheduler.RequestWithRequestID(requestID, request.Model)
 		if err != nil {
 			writeInferenceSchedulerError(w, err)
 			return

@@ -61,10 +61,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("open lease idempotency store: %v", err)
 	}
-	handler, registry, recoveryService, err := api.NewHandlerWithJournalAndRecoveryAndCapacity(manager, sched, cfg.Proxy, journal, capacity.Options{SystemMarginPercent: cfg.Capacity.SystemMarginPercent, GPUMarginPercent: cfg.Capacity.GPUMarginPercent})
+	handler, registry, recoveryService, err := api.NewHandlerWithJournalAndRecoveryAndCapacity(manager, sched, cfg.Proxy, journal, capacity.Options{ShadowMode: cfg.Capacity.ShadowMode, SystemMarginPercent: cfg.Capacity.SystemMarginPercent, GPUMarginPercent: cfg.Capacity.GPUMarginPercent})
 	if err != nil {
 		log.Fatalf("open inference recovery state: %v", err)
 	}
+	defer func() { _ = handler.(interface{ Close() error }).Close() }()
 	// Recovery and the Scheduler admission gate are installed by the handler
 	// construction before any configured residency load is admitted.
 	if err := sched.Preload(); err != nil {
@@ -147,7 +148,7 @@ func readOnlyCommandIndex(args []string) int {
 
 func isReadOnlyCommand(command string) bool {
 	switch command {
-	case "models", "status", "queue", "capacity", "doctor":
+	case "models", "status", "queue", "capacity", "capacity-evaluations", "doctor":
 		return true
 	default:
 		return false

@@ -25,6 +25,7 @@ type Handler struct {
 	inferences *inference.Registry
 	recovery   *recoveryservice.Service
 	planner    *capacity.Planner
+	shadow     *capacity.Shadow
 	completed  atomic.Uint64
 	failed     atomic.Uint64
 	unknown    atomic.Uint64
@@ -60,11 +61,17 @@ func newHandler(manager *runtime.Manager, sched *scheduler.Scheduler, proxy conf
 	h := &Handler{manager: manager, inferences: registry, recovery: recovery}
 	if manager != nil {
 		h.planner, _ = capacity.NewPlanner(manager.MemorySnapshot, manager.ModelConfig, options)
+		if options.ShadowMode && h.planner != nil {
+			h.shadow = capacity.NewShadow(h.planner)
+		}
 	}
 	h.scheduler = sched
 	if sched != nil {
 		sched.SetReleaseProtector(registry)
 		sched.SetAdmissionGate(registry)
+		if h.shadow != nil {
+			sched.SetAdmissionObserver(h.shadow)
+		}
 	}
 	h.proxy = proxy
 	h.client = newBackendClient(proxy.ConnectDuration())
@@ -77,6 +84,7 @@ func newHandler(manager *runtime.Manager, sched *scheduler.Scheduler, proxy conf
 	mux.HandleFunc("GET /api/v1/processes", h.listProcesses)
 	mux.HandleFunc("GET /api/v1/processes/{process_instance_id}", h.getProcess)
 	mux.HandleFunc("GET /api/v1/capacity", h.capacityQuery)
+	mux.HandleFunc("GET /api/v1/capacity/evaluations", h.capacityEvaluations)
 	mux.HandleFunc("GET /api/v1/capacity/{model}", h.capacityPlan)
 	mux.HandleFunc("GET /api/v1/recovery/status", h.recoveryStatus)
 	mux.HandleFunc("GET /api/v1/recovery/inferences", h.recoveryInferences)
@@ -101,6 +109,13 @@ func newHandler(manager *runtime.Manager, sched *scheduler.Scheduler, proxy conf
 		mux.HandleFunc("POST /v1/embeddings", h.embeddings)
 	}
 	return mux
+}
+
+func (h *Handler) Close() error {
+	if h.shadow != nil {
+		h.shadow.Close()
+	}
+	return nil
 }
 
 func (h *Handler) publicMutationRejected(w http.ResponseWriter, _ *http.Request) {
@@ -205,6 +220,14 @@ func (h *Handler) capacityQuery(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) capacityPlan(w http.ResponseWriter, r *http.Request) {
 	h.writeCapacity(w, r, r.PathValue("model"))
+}
+
+func (h *Handler) capacityEvaluations(w http.ResponseWriter, _ *http.Request) {
+	if h.shadow == nil {
+		writeJSON(w, http.StatusOK, []capacity.Evaluation{})
+		return
+	}
+	writeJSON(w, http.StatusOK, h.shadow.Evaluations())
 }
 
 func (h *Handler) writeCapacity(w http.ResponseWriter, r *http.Request, model string) {

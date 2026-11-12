@@ -25,6 +25,7 @@ type Config struct {
 // CapacityConfig controls only the dry-run memory estimate. It never affects
 // admission, scheduling, residency, or runtime lifecycle decisions.
 type CapacityConfig struct {
+	ShadowMode          bool    `yaml:"shadow_mode"`
 	SystemMarginPercent float64 `yaml:"system_margin_percent"`
 	GPUMarginPercent    float64 `yaml:"gpu_margin_percent"`
 }
