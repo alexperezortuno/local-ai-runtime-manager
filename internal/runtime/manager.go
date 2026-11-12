@@ -888,6 +888,22 @@ func (m *Manager) currentMemorySnapshot(snapshot memory.Snapshot) memory.Snapsho
 	return snapshot
 }
 
+// MemorySnapshot is a read-only copy of the latest observation. Capacity
+// planning consumes this value and never reaches into the Observer.
+func (m *Manager) MemorySnapshot() memory.Snapshot {
+	if m.observer == nil {
+		return memory.Snapshot{Status: memory.Unavailable, Source: "larm-memory-observer"}
+	}
+	return m.observer.Snapshot()
+}
+
+// ModelConfig returns the configured model inputs needed by read-only tools.
+// It does not expose the filesystem path through an HTTP response.
+func (m *Manager) ModelConfig(id string) (config.ModelConfig, bool) {
+	model, err := m.registry.Get(id)
+	return model, err == nil
+}
+
 func (m *Manager) Models() map[string]ModelStatus {
 	m.mu.Lock()
 	result := make(map[string]ModelStatus)

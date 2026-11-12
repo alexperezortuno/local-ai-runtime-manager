@@ -15,6 +15,11 @@ scheduler:
   heartbeat_interval: "30s"
   max_lease_duration: "2h"
 
+# Dry-run only: these margins never reject requests or change Scheduler state.
+capacity:
+  system_margin_percent: 10
+  gpu_margin_percent: 10
+
 proxy:
   queue_wait_timeout: "5m"
   inference_timeout: "10m"

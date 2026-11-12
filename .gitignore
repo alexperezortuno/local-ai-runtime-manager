@@ -13,3 +13,5 @@ configs/*
 larm
 larm-recovery.json
 larm-recovery.json.operator.json
+*.pyc
+larm-*.json

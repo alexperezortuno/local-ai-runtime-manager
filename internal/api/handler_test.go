@@ -224,6 +224,32 @@ func TestModelsJSONOmitsFilesystemPathAndKeepsInternalConfiguration(t *testing.T
 	}
 }
 
+func TestCapacityEndpointsAreReadOnlyAndExplainUnknownGGUF(t *testing.T) {
+	manager, sched := apiTestScheduler(t)
+	server := httptest.NewServer(NewHandler(manager, sched))
+	defer server.Close()
+	before := sched.Snapshot()
+	for _, path := range []string{"/api/v1/capacity/model-1", "/api/v1/capacity?model=model-1"} {
+		response, err := server.Client().Get(server.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result map[string]any
+		if err := json.NewDecoder(response.Body).Decode(&result); err != nil {
+			_ = response.Body.Close()
+			t.Fatal(err)
+		}
+		_ = response.Body.Close()
+		if response.StatusCode != http.StatusOK || result["verdict"] != "UNKNOWN" || result["snapshot"] == nil {
+			t.Fatalf("capacity response = %d %+v", response.StatusCode, result)
+		}
+	}
+	after := sched.Snapshot()
+	if before.Active != after.Active || len(before.Pending) != len(after.Pending) {
+		t.Fatalf("capacity query changed scheduler state: before=%+v after=%+v", before, after)
+	}
+}
+
 func TestIdempotentLeaseHTTPReplayConflictAndValidation(t *testing.T) {
 	manager, sched := apiTestScheduler(t)
 	server := httptest.NewServer(NewHandler(manager, sched))

@@ -33,6 +33,8 @@ func TestReadOnlyAdministrativeCommands(t *testing.T) {
 			_, _ = io.WriteString(w, `[{"lease_id":"lease-1","protected":false}]`)
 		case "/api/v1/processes":
 			_, _ = io.WriteString(w, `[{"process_instance_id":"process-1","ownership_status":"OWNED_VERIFIED"}]`)
+		case "/api/v1/capacity/model-1":
+			_, _ = io.WriteString(w, `{"verdict":"FIT","model_id":"model-1","justification":["fixture"]}`)
 		case "/api/v1/recovery/incidents":
 			_, _ = io.WriteString(w, `[{"incident_id":"incident-1","status":"BLOCKED"}]`)
 		case "/api/v1/recovery/incidents/incident-1":
@@ -56,6 +58,7 @@ func TestReadOnlyAdministrativeCommands(t *testing.T) {
 		{"incident", []string{"-url", server.URL, "incident", "incident-1"}, `"blocking_reasons"`},
 		{"plan", []string{"-url", server.URL, "plan", "incident-1"}, `"BLOCKED_PROCESS_IDENTITY"`},
 		{"processes", []string{"-url", server.URL, "processes"}, `"process_instance_id": "process-1"`},
+		{"capacity", []string{"-url", server.URL, "capacity", "model-1"}, `"verdict": "FIT"`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

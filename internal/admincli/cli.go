@@ -47,10 +47,10 @@ func run(args []string, stdout, stderr io.Writer, readOnly bool) int {
 	flags.SetOutput(stderr)
 	flags.Usage = func() {
 		if readOnly {
-			_, _ = fmt.Fprintln(stderr, "usage: larm [-config PATH] [-url URL] [-timeout DURATION] <models|status|queue|doctor>")
+			_, _ = fmt.Fprintln(stderr, "usage: larm [-config PATH] [-url URL] [-timeout DURATION] <models|status|queue|capacity MODEL|doctor>")
 			return
 		}
-		_, _ = fmt.Fprintln(stderr, "usage: larm admin [-url URL] [-socket PATH] [-private-key PATH] [-capability-file PATH] [-out PATH] [-timeout DURATION] <models|status|queue|incidents|incident|plan|processes|auth|model|recovery>")
+		_, _ = fmt.Fprintln(stderr, "usage: larm admin [-url URL] [-socket PATH] [-private-key PATH] [-capability-file PATH] [-out PATH] [-timeout DURATION] <models|status|queue|capacity MODEL|incidents|incident|plan|processes|auth|model|recovery>")
 	}
 	endpoint := defaultURL
 	if value := strings.TrimSpace(os.Getenv("LARM_ADMIN_URL")); value != "" {
@@ -99,6 +99,11 @@ func run(args []string, stdout, stderr io.Writer, readOnly bool) int {
 			return usageError(stderr, "queue does not accept arguments")
 		}
 		value, err = client.get("/api/v1/queue")
+	case "capacity":
+		if len(command) != 2 || strings.TrimSpace(command[1]) == "" {
+			return usageError(stderr, "capacity requires a model-id")
+		}
+		value, err = client.get("/api/v1/capacity/" + url.PathEscape(command[1]))
 	case "doctor":
 		if !readOnly {
 			return usageError(stderr, "unknown administrative command \"doctor\"")
@@ -198,6 +203,11 @@ func run(args []string, stdout, stderr io.Writer, readOnly bool) int {
 		case "queue":
 			if err := renderQueue(stdout, value); err != nil {
 				_, _ = fmt.Fprintf(stderr, "larm: render queue: %v\n", err)
+				return 1
+			}
+		case "capacity":
+			if err := writeJSON(stdout, value); err != nil {
+				_, _ = fmt.Fprintf(stderr, "larm: render capacity: %v\n", err)
 				return 1
 			}
 		}

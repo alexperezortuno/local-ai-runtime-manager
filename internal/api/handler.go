@@ -9,6 +9,7 @@ import (
 	"sort"
 	"sync/atomic"
 
+	"local-ai-runtime/internal/capacity"
 	"local-ai-runtime/internal/config"
 	"local-ai-runtime/internal/inference"
 	recoveryservice "local-ai-runtime/internal/recovery"
@@ -23,6 +24,7 @@ type Handler struct {
 	client     *http.Client
 	inferences *inference.Registry
 	recovery   *recoveryservice.Service
+	planner    *capacity.Planner
 	completed  atomic.Uint64
 	failed     atomic.Uint64
 	unknown    atomic.Uint64
@@ -41,15 +43,24 @@ func NewHandlerWithConfig(manager *runtime.Manager, sched *scheduler.Scheduler, 
 }
 
 func NewHandlerWithConfigAndRegistry(manager *runtime.Manager, sched *scheduler.Scheduler, proxy config.ProxyConfig, registry *inference.Registry) http.Handler {
-	return newHandler(manager, sched, proxy, registry, nil)
+	return newHandler(manager, sched, proxy, registry, nil, capacity.DefaultOptions())
 }
 
-func newHandler(manager *runtime.Manager, sched *scheduler.Scheduler, proxy config.ProxyConfig, registry *inference.Registry, recovery *recoveryservice.Service) http.Handler {
+// NewHandlerWithCapacity is the read-only HTTP handler with configured
+// dry-run margins. The planner does not participate in scheduler decisions.
+func NewHandlerWithCapacity(manager *runtime.Manager, sched *scheduler.Scheduler, proxy config.ProxyConfig, options capacity.Options) http.Handler {
+	return newHandler(manager, sched, proxy, nil, nil, options)
+}
+
+func newHandler(manager *runtime.Manager, sched *scheduler.Scheduler, proxy config.ProxyConfig, registry *inference.Registry, recovery *recoveryservice.Service, options capacity.Options) http.Handler {
 	proxy = defaultProxyConfig(proxy)
 	if registry == nil {
 		registry = inference.New(inference.Options{MaxTerminalRecords: proxy.InferenceMaxTerminalRecords})
 	}
 	h := &Handler{manager: manager, inferences: registry, recovery: recovery}
+	if manager != nil {
+		h.planner, _ = capacity.NewPlanner(manager.MemorySnapshot, manager.ModelConfig, options)
+	}
 	h.scheduler = sched
 	if sched != nil {
 		sched.SetReleaseProtector(registry)
@@ -65,6 +76,8 @@ func newHandler(manager *runtime.Manager, sched *scheduler.Scheduler, proxy conf
 	mux.HandleFunc("GET /api/v1/inferences/{request_id}", h.getInference)
 	mux.HandleFunc("GET /api/v1/processes", h.listProcesses)
 	mux.HandleFunc("GET /api/v1/processes/{process_instance_id}", h.getProcess)
+	mux.HandleFunc("GET /api/v1/capacity", h.capacityQuery)
+	mux.HandleFunc("GET /api/v1/capacity/{model}", h.capacityPlan)
 	mux.HandleFunc("GET /api/v1/recovery/status", h.recoveryStatus)
 	mux.HandleFunc("GET /api/v1/recovery/inferences", h.recoveryInferences)
 	mux.HandleFunc("GET /api/v1/recovery/leases", h.recoveryLeases)
@@ -104,6 +117,12 @@ func NewHandlerWithJournal(manager *runtime.Manager, sched *scheduler.Scheduler,
 // NewHandlerWithJournalAndRecovery exposes the existing Recovery Service to
 // the private administrative listener without adding an HTTP admin endpoint.
 func NewHandlerWithJournalAndRecovery(manager *runtime.Manager, sched *scheduler.Scheduler, proxy config.ProxyConfig, journal *inference.Journal) (http.Handler, *inference.Registry, *recoveryservice.Service, error) {
+	return NewHandlerWithJournalAndRecoveryAndCapacity(manager, sched, proxy, journal, capacity.DefaultOptions())
+}
+
+// NewHandlerWithJournalAndRecoveryAndCapacity keeps capacity planning behind
+// the existing read-only API boundary while allowing margins from config.
+func NewHandlerWithJournalAndRecoveryAndCapacity(manager *runtime.Manager, sched *scheduler.Scheduler, proxy config.ProxyConfig, journal *inference.Journal, options capacity.Options) (http.Handler, *inference.Registry, *recoveryservice.Service, error) {
 	registry, err := inference.Open(inference.Options{MaxTerminalRecords: proxy.InferenceMaxTerminalRecords, Journal: journal})
 	if err != nil {
 		return nil, nil, nil, err
@@ -116,7 +135,7 @@ func NewHandlerWithJournalAndRecovery(manager *runtime.Manager, sched *scheduler
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	return newHandler(manager, sched, proxy, registry, operatorRecovery), registry, operatorRecovery, nil
+	return newHandler(manager, sched, proxy, registry, operatorRecovery, options), registry, operatorRecovery, nil
 }
 
 func (h *Handler) health(w http.ResponseWriter, _ *http.Request) {
@@ -173,6 +192,27 @@ func (h *Handler) getProcess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, process)
+}
+
+func (h *Handler) capacityQuery(w http.ResponseWriter, r *http.Request) {
+	model := r.URL.Query().Get("model")
+	if model == "" {
+		writeError(w, http.StatusBadRequest, "capacity requires a model query parameter")
+		return
+	}
+	h.writeCapacity(w, r, model)
+}
+
+func (h *Handler) capacityPlan(w http.ResponseWriter, r *http.Request) {
+	h.writeCapacity(w, r, r.PathValue("model"))
+}
+
+func (h *Handler) writeCapacity(w http.ResponseWriter, r *http.Request, model string) {
+	if h.planner == nil {
+		writeJSON(w, http.StatusOK, capacity.Result{Verdict: capacity.Unknown, ModelID: model, Justification: []string{"capacity planner unavailable"}})
+		return
+	}
+	writeJSON(w, http.StatusOK, h.planner.Plan(r.Context(), model))
 }
 
 func (h *Handler) recoveryStatus(w http.ResponseWriter, _ *http.Request) {

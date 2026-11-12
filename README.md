@@ -93,6 +93,7 @@ API:
 larm models       # estado, residencia, PID/ProcessInstanceID, leases y capacidad
 larm status       # servicio, modelos, residentes, capacidad, cola y Recovery
 larm queue        # FIFO, estado, lease_id y espera observada
+larm capacity code-fast # plan de memoria dry-run, sólo lectura
 larm doctor       # validación read-only; no carga modelos ni ejecuta Recovery
 ```
 
@@ -107,6 +108,8 @@ curl http://127.0.0.1:8090/health
 curl http://127.0.0.1:8090/api/v1/models
 curl http://127.0.0.1:8090/api/v1/status
 curl http://127.0.0.1:8090/api/v1/processes
+curl http://127.0.0.1:8090/api/v1/capacity/code-fast
+curl 'http://127.0.0.1:8090/api/v1/capacity?model=code-fast'
 curl -i -X POST http://127.0.0.1:8090/api/v1/models/code-fast/start # rechazado: requiere socket protegido
 ```
 

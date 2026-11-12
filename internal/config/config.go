@@ -15,10 +15,18 @@ type Config struct {
 	Server    ServerConfig           `yaml:"server"`
 	Runtime   RuntimeConfig          `yaml:"runtime"`
 	Scheduler SchedulerConfig        `yaml:"scheduler"`
+	Capacity  CapacityConfig         `yaml:"capacity"`
 	Proxy     ProxyConfig            `yaml:"proxy"`
 	Recovery  RecoveryConfig         `yaml:"recovery"`
 	Admin     AdminConfig            `yaml:"admin"`
 	Models    map[string]ModelConfig `yaml:"models"`
+}
+
+// CapacityConfig controls only the dry-run memory estimate. It never affects
+// admission, scheduling, residency, or runtime lifecycle decisions.
+type CapacityConfig struct {
+	SystemMarginPercent float64 `yaml:"system_margin_percent"`
+	GPUMarginPercent    float64 `yaml:"gpu_margin_percent"`
 }
 
 type ProxyConfig struct {
@@ -97,6 +105,18 @@ func (m ModelConfig) TimeAliveDuration() time.Duration {
 var modelIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
 
 func (c *Config) Validate() error {
+	if c.Capacity.SystemMarginPercent == 0 {
+		c.Capacity.SystemMarginPercent = 10
+	}
+	if c.Capacity.GPUMarginPercent == 0 {
+		c.Capacity.GPUMarginPercent = 10
+	}
+	if c.Capacity.SystemMarginPercent < 0 || c.Capacity.SystemMarginPercent >= 100 {
+		return fmt.Errorf("capacity.system_margin_percent must be between 0 and 100")
+	}
+	if c.Capacity.GPUMarginPercent < 0 || c.Capacity.GPUMarginPercent >= 100 {
+		return fmt.Errorf("capacity.gpu_margin_percent must be between 0 and 100")
+	}
 	if c.Proxy.QueueWaitTimeout == "" {
 		c.Proxy.QueueWaitTimeout = "5m"
 	}

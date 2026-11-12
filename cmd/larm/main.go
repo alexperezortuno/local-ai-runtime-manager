@@ -18,6 +18,7 @@ import (
 	"local-ai-runtime/internal/adminauth"
 	"local-ai-runtime/internal/admincli"
 	"local-ai-runtime/internal/api"
+	"local-ai-runtime/internal/capacity"
 	"local-ai-runtime/internal/config"
 	"local-ai-runtime/internal/inference"
 	runtime "local-ai-runtime/internal/runtime"
@@ -32,8 +33,13 @@ func main() {
 		original := os.Args[1:]
 		command := original[index]
 		args := append([]string(nil), original[:index]...)
-		args = append(args, original[index+1:]...)
-		args = append(args, command)
+		if command == "capacity" {
+			// capacity has a model operand; keep the command before it after flags.
+			args = append(args, original[index:]...)
+		} else {
+			args = append(args, original[index+1:]...)
+			args = append(args, command)
+		}
 		os.Exit(admincli.RunReadOnly(args, os.Stdout, os.Stderr))
 	}
 	defaultConfig := os.Getenv("LARM_CONFIG")
@@ -55,7 +61,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("open lease idempotency store: %v", err)
 	}
-	handler, registry, recoveryService, err := api.NewHandlerWithJournalAndRecovery(manager, sched, cfg.Proxy, journal)
+	handler, registry, recoveryService, err := api.NewHandlerWithJournalAndRecoveryAndCapacity(manager, sched, cfg.Proxy, journal, capacity.Options{SystemMarginPercent: cfg.Capacity.SystemMarginPercent, GPUMarginPercent: cfg.Capacity.GPUMarginPercent})
 	if err != nil {
 		log.Fatalf("open inference recovery state: %v", err)
 	}
@@ -141,7 +147,7 @@ func readOnlyCommandIndex(args []string) int {
 
 func isReadOnlyCommand(command string) bool {
 	switch command {
-	case "models", "status", "queue", "doctor":
+	case "models", "status", "queue", "capacity", "doctor":
 		return true
 	default:
 		return false
