@@ -3,13 +3,17 @@ package admincli
 import (
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"local-ai-runtime/internal/config"
 )
 
 func TestReadOnlyAdministrativeCommands(t *testing.T) {
@@ -276,5 +280,98 @@ models:
 	}
 	if _, err := os.Stat(configPath); err != nil {
 		t.Fatalf("doctor changed config: %v", err)
+	}
+}
+
+func TestDoctorPassesOccupiedPortForVerifiedRuntimeBackend(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	port := listener.Addr().(*net.TCPAddr).Port
+	dir := t.TempDir()
+	model := filepath.Join(dir, "model.gguf")
+	if err := os.WriteFile(model, []byte("fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(dir, "models.yaml")
+	config := "runtime:\n  binary: \"" + os.Args[0] + "\"\nmodels:\n  code-agent:\n    path: \"" + model + "\"\n    port: " + strconv.Itoa(port) + "\n    context: 1024\n    batch: 128\n    ubatch: 32\n    gpu_layers: \"0\"\n    parallel: 1\n    temperature: 0.2\n    top_p: 0.9\n    top_k: 40\n"
+	if err := os.WriteFile(configPath, []byte(config), 0600); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/health":
+			_, _ = io.WriteString(w, `{"status":"ok"}`)
+		case "/api/v1/models":
+			_, _ = io.WriteString(w, `[{"id":"code-agent","port":`+strconv.Itoa(port)+`,"state":"READY","pid":237298,"process_instance_id":"process-1","process_identity_status":"VERIFIED","ownership_status":"OWNED_VERIFIED"}]`)
+		case "/api/v1/processes":
+			_, _ = io.WriteString(w, `[{"model_id":"code-agent","state":"READY","pid":237298,"process_instance_id":"process-1","process_identity_status":"VERIFIED","ownership_status":"OWNED_VERIFIED"}]`)
+		case "/api/v1/status":
+			_, _ = io.WriteString(w, `{}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	var output, errors strings.Builder
+	if code := RunReadOnly([]string{"-config", configPath, "-url", server.URL, "doctor"}, &output, &errors); code != 0 {
+		t.Fatalf("doctor code=%d output=%q stderr=%q", code, output.String(), errors.String())
+	}
+	if !strings.Contains(output.String(), "PORT_"+strconv.Itoa(port)+"\tPASS\tbackend port is occupied by the verified managed backend") {
+		t.Fatalf("doctor did not accept verified managed port: %q", output.String())
+	}
+}
+
+func TestCheckModelPortsAcceptsOnlyVerifiedReadyRuntime(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	port := listener.Addr().(*net.TCPAddr).Port
+	cfg := config.Config{Models: map[string]config.ModelConfig{"code-agent": {Port: port}}}
+	verified := []doctorProcessStatus{{modelID: "code-agent", state: "READY", pid: 237298, processInstanceID: "process-1", processIdentityStatus: "VERIFIED", ownershipStatus: "OWNED_VERIFIED"}}
+	checks := checkModelPorts(cfg, verified)
+	if len(checks) != 1 || checks[0].result != "PASS" {
+		t.Fatalf("verified managed backend = %+v", checks)
+	}
+
+	for _, status := range []doctorProcessStatus{
+		{modelID: "code-agent", state: "READY", pid: 237298, processInstanceID: "process-1", processIdentityStatus: "UNVERIFIED", ownershipStatus: "UNKNOWN"},
+		{modelID: "code-agent", state: "READY", pid: 237298, processInstanceID: "process-1", processIdentityStatus: "VERIFIED", ownershipStatus: "FOREIGN"},
+		{modelID: "code-agent", state: "STARTING", pid: 237298, processInstanceID: "process-1", processIdentityStatus: "VERIFIED", ownershipStatus: "OWNED_VERIFIED"},
+	} {
+		checks = checkModelPorts(cfg, []doctorProcessStatus{status})
+		if len(checks) != 1 || checks[0].result != "FAIL" {
+			t.Fatalf("untrusted backend status %+v produced %+v", status, checks)
+		}
+	}
+}
+
+func TestCheckModelPortsHandlesMultipleConfiguredModels(t *testing.T) {
+	managed, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer managed.Close()
+	external, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer external.Close()
+	cfg := config.Config{Models: map[string]config.ModelConfig{
+		"code-agent": {Port: managed.Addr().(*net.TCPAddr).Port},
+		"other":      {Port: external.Addr().(*net.TCPAddr).Port},
+	}}
+	checks := checkModelPorts(cfg, []doctorProcessStatus{{modelID: "code-agent", state: "READY", pid: 1, processInstanceID: "process-1", processIdentityStatus: "VERIFIED", ownershipStatus: "OWNED_VERIFIED"}})
+	results := make(map[string]string, len(checks))
+	for _, check := range checks {
+		results[check.name] = check.result
+	}
+	if len(checks) != 2 || results["PORT_"+strconv.Itoa(cfg.Models["code-agent"].Port)] != "PASS" || results["PORT_"+strconv.Itoa(cfg.Models["other"].Port)] != "FAIL" {
+		t.Fatalf("multiple model port checks = %+v", checks)
 	}
 }

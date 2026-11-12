@@ -428,7 +428,11 @@ func doctor(configPath string, client *client, stdout, stderr io.Writer) int {
 	} else {
 		checks = append(checks, doctorCheck{"GGUF", "FAIL", "one or more configured model files are unavailable"})
 	}
-	checks = append(checks, checkModelPorts(cfg)...)
+	var processStatuses []doctorProcessStatus
+	if value, processesErr := client.get("/api/v1/processes"); processesErr == nil {
+		processStatuses = parseDoctorProcessStatuses(value)
+	}
+	checks = append(checks, checkModelPorts(cfg, processStatuses)...)
 	_, healthErr := client.get("/health")
 	checks = append(checks, checkServerPort(cfg, healthErr))
 	checks = append(checks, checkDirectories(cfg)...)
@@ -499,17 +503,72 @@ func checkObservability(client *client) []doctorCheck {
 	return append(checks, gpuResult)
 }
 
-func checkModelPorts(cfg config.Config) []doctorCheck {
+type doctorProcessStatus struct {
+	modelID               string
+	pid                   int
+	processInstanceID     string
+	state                 string
+	processIdentityStatus string
+	ownershipStatus       string
+}
+
+func parseDoctorProcessStatuses(value any) []doctorProcessStatus {
+	entries, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	result := make([]doctorProcessStatus, 0, len(entries))
+	for _, raw := range entries {
+		entry, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		result = append(result, doctorProcessStatus{
+			modelID:               stringValue(entry["model_id"]),
+			pid:                   intValue(entry["pid"]),
+			processInstanceID:     stringValue(entry["process_instance_id"]),
+			state:                 stringValue(entry["state"]),
+			processIdentityStatus: stringValue(entry["process_identity_status"]),
+			ownershipStatus:       stringValue(entry["ownership_status"]),
+		})
+	}
+	return result
+}
+
+func intValue(value any) int {
+	parsed, err := strconv.Atoi(stringValue(value))
+	if err != nil {
+		return 0
+	}
+	return parsed
+}
+
+func managedBackendForPort(statuses []doctorProcessStatus, id string) bool {
+	for _, status := range statuses {
+		if status.modelID == id && status.state == "READY" && status.pid > 0 && status.processInstanceID != "" && status.processIdentityStatus == "VERIFIED" && status.ownershipStatus == "OWNED_VERIFIED" {
+			return true
+		}
+	}
+	return false
+}
+
+func checkModelPorts(cfg config.Config, statuses []doctorProcessStatus) []doctorCheck {
 	ports := make([]int, 0, len(cfg.Models))
-	for _, model := range cfg.Models {
+	modelIDs := make(map[int]string, len(cfg.Models))
+	for id, model := range cfg.Models {
 		ports = append(ports, model.Port)
+		modelIDs[model.Port] = id
 	}
 	sort.Ints(ports)
 	checks := make([]doctorCheck, 0, len(ports))
 	for _, port := range ports {
 		listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
 		if err != nil {
-			checks = append(checks, doctorCheck{"PORT_" + strconv.Itoa(port), "FAIL", "backend port is already in use"})
+			if managedBackendForPort(statuses, modelIDs[port]) {
+				checks = append(checks, doctorCheck{"PORT_" + strconv.Itoa(port), "PASS", "backend port is occupied by the verified managed backend"})
+			} else {
+				checks = append(checks, doctorCheck{"PORT_" + strconv.Itoa(port), "FAIL", "backend port is already in use and managed ownership could not be verified"})
+			}
 			continue
 		}
 		_ = listener.Close()

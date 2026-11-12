@@ -758,6 +758,25 @@ func (m *Manager) ProcessInstances() []corecontract.ProcessInstance {
 	return result
 }
 
+// ProcessInstancesWithLiveIdentity returns process evidence with a fresh
+// identity check for currently managed processes. It does not mutate runtime
+// state or adopt a process whose identity no longer matches.
+func (m *Manager) ProcessInstancesWithLiveIdentity() []corecontract.ProcessInstance {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	result := make([]corecontract.ProcessInstance, 0, len(m.processes))
+	for _, instance := range m.processes {
+		if p := m.procs[instance.ModelID]; p != nil && p.instanceID == instance.ProcessInstanceID {
+			if _, err := p.identityVerified(); err != nil {
+				instance.ProcessIdentityStatus = "UNVERIFIED"
+				instance.OwnershipStatus = "UNKNOWN"
+			}
+		}
+		result = append(result, instance)
+	}
+	return result
+}
+
 func (m *Manager) ProcessInstance(id string) (corecontract.ProcessInstance, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

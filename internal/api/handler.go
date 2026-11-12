@@ -178,7 +178,7 @@ func (h *Handler) listProcesses(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, []any{})
 		return
 	}
-	writeJSON(w, http.StatusOK, h.manager.ProcessInstances())
+	writeJSON(w, http.StatusOK, h.manager.ProcessInstancesWithLiveIdentity())
 }
 
 func (h *Handler) getProcess(w http.ResponseWriter, r *http.Request) {
