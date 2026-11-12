@@ -7,3 +7,11 @@ skills-lock.json
 .vscode
 .idea
 .DS_Store
+evidence/*
+configs/*
+!configs/models.example.yaml
+larm
+larm-recovery.json
+larm-recovery.json.operator.json
+*.pyc
+larm-*.json

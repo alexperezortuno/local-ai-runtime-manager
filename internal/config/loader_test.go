@@ -26,8 +26,43 @@ func TestLoadValidYAML(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Server.Host != "127.0.0.1" || cfg.Runtime.StartupDuration().String() != "2m0s" || len(cfg.Models) != 1 {
+	if cfg.Server.Host != "127.0.0.1" || cfg.Runtime.StartupDuration().String() != "2m0s" || len(cfg.Models) != 1 || cfg.Scheduler.IdempotencyStore != path+".idempotency.json" || cfg.Models["test-model"].KeepAlive || cfg.Models["test-model"].TimeAlive != "0s" {
 		t.Fatalf("unexpected loaded config: %+v", cfg)
+	}
+}
+
+func TestLoadResidencyPolicy(t *testing.T) {
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "llama-server")
+	model := filepath.Join(dir, "model.gguf")
+	_ = os.WriteFile(binary, []byte("binary"), 0755)
+	_ = os.WriteFile(model, []byte("model"), 0600)
+	path := filepath.Join(dir, "models.yaml")
+	content := strings.Replace(validYAML(model), "top_p: 0.9", "top_p: 0.9\n    keep_alive: true\n    time_alive: 5m", 1)
+	content = strings.Replace(content, "/test/llama-server", binary, 1)
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Models["test"].KeepAlive || cfg.Models["test"].TimeAliveDuration().String() != "5m0s" {
+		t.Fatalf("residency policy = %+v", cfg.Models["test"])
+	}
+}
+
+func TestLoadRejectsNegativeResidency(t *testing.T) {
+	dir := t.TempDir()
+	model := filepath.Join(dir, "model.gguf")
+	_ = os.WriteFile(model, []byte("model"), 0600)
+	path := filepath.Join(dir, "models.yaml")
+	content := strings.Replace(validYAML(model), "top_p: 0.9", "top_p: 0.9\n    time_alive: -1s", 1)
+	content = strings.Replace(content, "/test/llama-server", filepath.Join(dir, "llama-server"), 1)
+	_ = os.WriteFile(path, []byte(content), 0600)
+	_ = os.WriteFile(filepath.Join(dir, "llama-server"), []byte("binary"), 0755)
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected negative time_alive to be rejected")
 	}
 }
 

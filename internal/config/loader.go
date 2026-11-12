@@ -20,6 +20,12 @@ func Load(path string) (Config, error) {
 	if err := decoder.Decode(&cfg); err != nil {
 		return Config{}, fmt.Errorf("decode config: %w", err)
 	}
+	if cfg.Scheduler.IdempotencyStore == "" {
+		cfg.Scheduler.IdempotencyStore = path + ".idempotency.json"
+	}
+	if cfg.Recovery.JournalPath == "" {
+		cfg.Recovery.JournalPath = path + ".recovery.json"
+	}
 	if host := os.Getenv("LARM_HOST"); host != "" {
 		cfg.Server.Host = host
 	}

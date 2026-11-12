@@ -146,6 +146,27 @@ func TestSecondModelConflicts(t *testing.T) {
 	}
 }
 
+func TestConfiguredCapacityAllowsMultipleResidentModels(t *testing.T) {
+	m := testManager(t, "normal", 2, time.Second, 100*time.Millisecond)
+	m.SetMaxActiveModels(2)
+	if err := m.Start(context.Background(), "model-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Start(context.Background(), "model-2"); err != nil {
+		t.Fatal(err)
+	}
+	models := m.Models()
+	if models["model-1"].PID == 0 || models["model-2"].PID == 0 || models["model-1"].ProcessInstanceID == models["model-2"].ProcessInstanceID {
+		t.Fatalf("resident models were not independent: %+v", models)
+	}
+	if err := m.Stop(context.Background(), "model-1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Stop(context.Background(), "model-2"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestConcurrentStartsAreSerialized(t *testing.T) {
 	m := testManager(t, "delay", 2, time.Second, 100*time.Millisecond)
 	start := make(chan struct{})
