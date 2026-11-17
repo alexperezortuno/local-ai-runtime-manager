@@ -26,6 +26,7 @@ type Handler struct {
 	recovery   *recoveryservice.Service
 	planner    *capacity.Planner
 	shadow     *capacity.Shadow
+	mux        *http.ServeMux
 	completed  atomic.Uint64
 	failed     atomic.Uint64
 	unknown    atomic.Uint64
@@ -53,7 +54,7 @@ func NewHandlerWithCapacity(manager *runtime.Manager, sched *scheduler.Scheduler
 	return newHandler(manager, sched, proxy, nil, nil, options)
 }
 
-func newHandler(manager *runtime.Manager, sched *scheduler.Scheduler, proxy config.ProxyConfig, registry *inference.Registry, recovery *recoveryservice.Service, options capacity.Options) http.Handler {
+func newHandler(manager *runtime.Manager, sched *scheduler.Scheduler, proxy config.ProxyConfig, registry *inference.Registry, recovery *recoveryservice.Service, options capacity.Options) *Handler {
 	proxy = defaultProxyConfig(proxy)
 	if registry == nil {
 		registry = inference.New(inference.Options{MaxTerminalRecords: proxy.InferenceMaxTerminalRecords})
@@ -108,7 +109,14 @@ func newHandler(manager *runtime.Manager, sched *scheduler.Scheduler, proxy conf
 		mux.HandleFunc("POST /v1/chat/completions", h.chatCompletions)
 		mux.HandleFunc("POST /v1/embeddings", h.embeddings)
 	}
-	return mux
+	h.mux = mux
+	return h
+}
+
+// ServeHTTP preserves the public HTTP handler contract while exposing the
+// handler-owned Planner to internal wiring.
+func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.mux.ServeHTTP(w, r)
 }
 
 func (h *Handler) Close() error {
