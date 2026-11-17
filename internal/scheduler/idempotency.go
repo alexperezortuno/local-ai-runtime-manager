@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -39,6 +40,14 @@ type reconciliationRecord struct {
 // RequestIdempotent atomically reserves a key and appends one lease to FIFO.
 // A replay returns the original lease status without touching TTL or queue order.
 func (s *Scheduler) RequestIdempotent(key, model string) (LeaseStatus, bool, error) {
+	return s.requestIdempotentWithContext(nil, key, model)
+}
+
+// requestIdempotentWithContext is the single idempotent acquisition path. A
+// replay reuses the original lease, its context and its original deadline: it
+// never restarts the effective deadline and never creates a second
+// acquisition.
+func (s *Scheduler) requestIdempotentWithContext(ctx context.Context, key, model string) (LeaseStatus, bool, error) {
 	key, err := normalizeIdempotencyKey(key)
 	if err != nil {
 		return LeaseStatus{}, false, err
@@ -97,6 +106,9 @@ func (s *Scheduler) RequestIdempotent(key, model string) (LeaseStatus, bool, err
 	}
 	s.leases[id] = &l
 	s.queue.push(id)
+	s.trackAdmissionRequestLocked(id, id)
+	s.trackAdmissionContextLocked(id, ctx)
+	s.trackAdmissionDeadlineLocked(id, ctx)
 	if observer := s.admissionObserver; observer != nil {
 		observer.ObserveAdmission(id, model, operation)
 	}

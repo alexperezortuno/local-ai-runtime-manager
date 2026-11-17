@@ -168,7 +168,13 @@ func (h *Handler) serveInference(w http.ResponseWriter, r *http.Request, path st
 		return nil
 	}
 	if automatic {
-		lease, err := h.scheduler.RequestWithRequestID(requestID, request.Model)
+		// The queue context bounds the wait for the lease only. It carries the
+		// proxy queue_wait_timeout and the caller deadline, so the effective
+		// admission deadline is min(D_admission, D_proxy, D_context). It never
+		// limits an inference that already started.
+		queueCtx, cancelQueue := context.WithTimeout(r.Context(), h.proxy.QueueWaitDuration())
+		defer cancelQueue()
+		lease, err := h.scheduler.RequestWithContext(queueCtx, requestID, request.Model)
 		if err != nil {
 			writeInferenceSchedulerError(w, err)
 			return
@@ -184,9 +190,7 @@ func (h *Handler) serveInference(w http.ResponseWriter, r *http.Request, path st
 		}
 		releaseReady = true
 		_ = h.inferences.WaitingLease(requestID)
-		queueCtx, cancelQueue := context.WithTimeout(r.Context(), h.proxy.QueueWaitDuration())
 		err = h.scheduler.WaitActive(queueCtx, leaseID)
-		cancelQueue()
 		if err != nil {
 			_ = h.inferences.MarkProcessUnverifiedWithPID(requestID, model.Port, h.manager.Models()[request.Model].PID)
 			if r.Context().Err() != nil || errors.Is(err, context.Canceled) {
@@ -210,28 +214,66 @@ func (h *Handler) serveInference(w http.ResponseWriter, r *http.Request, path st
 			writeInferenceSchedulerError(w, err)
 			return
 		}
-		if lease.State != scheduler.Active {
+		if lease.State == scheduler.Queued {
+			// An explicit lease that is still pending keeps its own admission
+			// wait and its own deadlines. No second acquisition is created:
+			// the request waits for that lease instead of requesting one.
+			if lease.Model != request.Model {
+				writeOpenAIError(w, http.StatusConflict, "lease model does not match request model")
+				return
+			}
+			queueCtx, cancelQueue := context.WithTimeout(r.Context(), h.proxy.QueueWaitDuration())
+			defer cancelQueue()
+			if err := createRecord(); err != nil {
+				status := http.StatusConflict
+				if errors.Is(err, inference.ErrRecoveryRequired) {
+					status = http.StatusServiceUnavailable
+				}
+				writeOpenAIError(w, status, err.Error())
+				return
+			}
+			releaseReady = false
+			_ = h.inferences.WaitingLease(requestID)
+			if err := h.scheduler.WaitActive(queueCtx, leaseID); err != nil {
+				_ = h.inferences.MarkProcessUnverifiedWithPID(requestID, model.Port, h.manager.Models()[request.Model].PID)
+				if r.Context().Err() != nil || errors.Is(err, context.Canceled) {
+					_ = h.inferences.CancelBeforeUpstream(requestID)
+				} else {
+					_ = h.inferences.FailBeforeUpstream(requestID, corecontract.ErrorBackend)
+				}
+				if r.Context().Err() == nil {
+					if errors.Is(err, context.DeadlineExceeded) {
+						writeOpenAIError(w, http.StatusGatewayTimeout, "timed out waiting for model queue")
+					} else {
+						writeInferenceSchedulerError(w, err)
+					}
+				}
+				return
+			}
+			_ = h.inferences.LeaseActive(requestID)
+		} else if lease.State != scheduler.Active {
 			if lease.State == scheduler.Expired {
 				writeOpenAIError(w, http.StatusConflict, "lease has expired")
 			} else {
 				writeOpenAIError(w, http.StatusConflict, "lease is not active")
 			}
 			return
-		}
-		if lease.Model != request.Model {
-			writeOpenAIError(w, http.StatusConflict, "lease model does not match request model")
-			return
-		}
-		if err := createRecord(); err != nil {
-			status := http.StatusConflict
-			if errors.Is(err, inference.ErrRecoveryRequired) {
-				status = http.StatusServiceUnavailable
+		} else {
+			if lease.Model != request.Model {
+				writeOpenAIError(w, http.StatusConflict, "lease model does not match request model")
+				return
 			}
-			writeOpenAIError(w, status, err.Error())
-			return
+			if err := createRecord(); err != nil {
+				status := http.StatusConflict
+				if errors.Is(err, inference.ErrRecoveryRequired) {
+					status = http.StatusServiceUnavailable
+				}
+				writeOpenAIError(w, status, err.Error())
+				return
+			}
+			releaseReady = false
+			_ = h.inferences.LeaseActive(requestID)
 		}
-		releaseReady = false
-		_ = h.inferences.LeaseActive(requestID)
 	}
 
 	inferCtx, cancelInference := context.WithTimeout(r.Context(), h.proxy.InferenceDuration())
@@ -429,12 +471,55 @@ func writeInferenceSchedulerError(w http.ResponseWriter, err error) {
 		status = http.StatusNotFound
 	case errors.Is(err, scheduler.ErrQueueFull):
 		status = http.StatusTooManyRequests
+	case errors.Is(err, scheduler.ErrAdmissionCapacity):
+		// A preventive capacity decision reuses the existing Scheduler
+		// conflict branch, exactly like scheduler.ErrCapacity.
+		status = http.StatusConflict
+	case errors.Is(err, scheduler.ErrAdmissionTimeout):
+		// The admission wait timed out: the existing queue-wait 504 branch.
+		status = http.StatusGatewayTimeout
+	case errors.Is(err, scheduler.ErrAdmissionUnavailable):
+		// No evaluation could be obtained: the existing availability 503.
+		status = http.StatusServiceUnavailable
+	case errors.Is(err, scheduler.ErrAdmissionRecovery):
+		// Recovery blocks admission: the existing availability 503.
+		status = http.StatusServiceUnavailable
+	case errors.Is(err, scheduler.ErrIdempotencyRecovery):
+		// Recovery blocks the acquisition: the existing availability 503.
+		status = http.StatusServiceUnavailable
+	case errors.Is(err, scheduler.ErrAdmissionCancelled):
+		// The caller went away before the upstream started.
+		status = http.StatusServiceUnavailable
 	case errors.Is(err, scheduler.ErrConflict), errors.Is(err, scheduler.ErrExpired), errors.Is(err, scheduler.ErrInferenceProtected), errors.Is(err, scheduler.ErrCapacity):
 		status = http.StatusConflict
 	case errors.Is(err, scheduler.ErrClosed), errors.Is(err, runtime.ErrUnavailable):
 		status = http.StatusServiceUnavailable
 	case errors.Is(err, context.DeadlineExceeded):
 		status = http.StatusGatewayTimeout
+	case errors.Is(err, context.Canceled):
+		status = http.StatusServiceUnavailable
 	}
-	writeOpenAIError(w, status, err.Error())
+	writeOpenAIError(w, status, admissionSafeMessage(err))
+}
+
+// admissionSafeMessage keeps the OpenAI error body free of internal process,
+// path and memory details. A typed admission error is reported with its
+// kind only; any other error keeps its current message.
+func admissionSafeMessage(err error) string {
+	var admissionErr *scheduler.AdmissionError
+	if errors.As(err, &admissionErr) {
+		switch admissionErr.Kind {
+		case scheduler.AdmissionErrorCapacity:
+			return "model capacity is exhausted"
+		case scheduler.AdmissionErrorTimeout:
+			return "timed out waiting for model capacity"
+		case scheduler.AdmissionErrorUnavailable:
+			return "capacity evaluation is unavailable"
+		case scheduler.AdmissionErrorCancelled:
+			return "request was cancelled"
+		case scheduler.AdmissionErrorRecovery:
+			return "recovery is required before admission"
+		}
+	}
+	return err.Error()
 }
