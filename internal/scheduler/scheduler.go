@@ -30,50 +30,61 @@ var (
 )
 
 type Scheduler struct {
-	mu                   sync.Mutex
-	manager              *runtime.Manager
-	maxQueue             int
-	ttl                  time.Duration
-	heartbeat            time.Duration
-	maxLease             time.Duration
-	leases               map[string]*Lease
-	queue                leaseQueue
-	activeID             string
-	preparingID          string
-	operationCancel      context.CancelFunc
-	preloadQueue         []string
-	preloadingID         string
-	preloadCancel        context.CancelFunc
-	preloadState         map[string]string
-	preloadError         map[string]string
-	preloadSuppressed    map[string]bool
-	manual               []manualCommand
-	manualBusy           bool
-	manualModel          bool
-	unloadWhenIdle       bool
-	unloadModel          string
-	residenceTimers      map[string]*time.Timer
-	residenceDue         map[string]uint64
-	residenceGen         map[string]uint64
-	residenceDeadlines   map[string]time.Time
-	inferences           map[string]map[uint64]inferencePin
-	nextInferenceID      uint64
-	changedMu            sync.Mutex
-	changed              chan struct{}
-	closing              bool
-	ctx                  context.Context
-	cancel               context.CancelFunc
-	wake                 chan struct{}
-	done                 chan struct{}
-	closeOnce            sync.Once
-	idempotencyPath      string
-	idempotency          map[string]idempotencyRecord
-	reconciliations      map[string]reconciliationRecord
-	recoveryBlocked      bool
-	uncleanStoreRecovery bool
-	cleanShutdown        bool
-	releaseProtector     ReleaseProtector
-	admissionGate        AdmissionGate
+	mu                        sync.Mutex
+	manager                   *runtime.Manager
+	maxQueue                  int
+	ttl                       time.Duration
+	heartbeat                 time.Duration
+	maxLease                  time.Duration
+	leases                    map[string]*Lease
+	queue                     leaseQueue
+	activeID                  string
+	preparingID               string
+	operationCancel           context.CancelFunc
+	preloadQueue              []string
+	preloadingID              string
+	preloadCancel             context.CancelFunc
+	preloadState              map[string]string
+	preloadError              map[string]string
+	preloadSuppressed         map[string]bool
+	manual                    []manualCommand
+	manualBusy                bool
+	manualModel               bool
+	unloadWhenIdle            bool
+	unloadModel               string
+	residenceTimers           map[string]*time.Timer
+	residenceDue              map[string]uint64
+	residenceGen              map[string]uint64
+	residenceDeadlines        map[string]time.Time
+	inferences                map[string]map[uint64]inferencePin
+	nextInferenceID           uint64
+	changedMu                 sync.Mutex
+	changed                   chan struct{}
+	closing                   bool
+	ctx                       context.Context
+	cancel                    context.CancelFunc
+	wake                      chan struct{}
+	done                      chan struct{}
+	closeOnce                 sync.Once
+	idempotencyPath           string
+	idempotency               map[string]idempotencyRecord
+	reconciliations           map[string]reconciliationRecord
+	recoveryBlocked           bool
+	uncleanStoreRecovery      bool
+	cleanShutdown             bool
+	releaseProtector          ReleaseProtector
+	admissionGate             AdmissionGate
+	admissionObserver         AdmissionObserver
+	admissionEvaluator        AdmissionEvaluator
+	admissionRequests         map[string]admissionRequestState
+	nextAdmissionRequest      uint64
+	admissionOptions          AdmissionOptions
+	admissionContext          AdmissionContextProvider
+	admissionWait             *admissionWait
+	admissionTimer            *time.Timer
+	admissionDeadline         map[string]time.Time
+	admissionContexts         map[string]context.Context
+	admissionContextDeadlines map[string]time.Time
 	// idempotencyFault is a package-local test seam. Production never sets it;
 	// it lets persistence tests fail at an explicit durable-store boundary.
 	idempotencyFault func(string) error
@@ -89,6 +100,18 @@ type ReleaseProtector interface {
 // only component that owns queue and lease transitions.
 type AdmissionGate interface {
 	AdmissionBlocked() bool
+}
+
+// AdmissionObserver receives a non-authoritative admission observation. The
+// scheduler never waits for it and never uses its result.
+type AdmissionObserver interface {
+	// ObserveAdmission must only enqueue/copy data and return promptly.
+	ObserveAdmission(requestID, model, operation string)
+}
+
+type admissionRequestState struct {
+	requestID  string
+	generation uint64
 }
 
 type inferencePin struct {
@@ -149,11 +172,25 @@ func newScheduler(manager *runtime.Manager, cfg config.SchedulerConfig) *Schedul
 			}
 		}
 	}
-	s := &Scheduler{manager: manager, maxQueue: cfg.MaxQueueSize, ttl: cfg.LeaseTTLDuration(), heartbeat: cfg.HeartbeatDuration(), maxLease: cfg.MaxLeaseDuration(), leases: make(map[string]*Lease), inferences: make(map[string]map[uint64]inferencePin), residenceTimers: make(map[string]*time.Timer), residenceDue: make(map[string]uint64), residenceGen: make(map[string]uint64), residenceDeadlines: make(map[string]time.Time), preloadState: preloadState, preloadError: make(map[string]string), preloadSuppressed: make(map[string]bool), changed: make(chan struct{}), ctx: ctx, cancel: cancel, wake: make(chan struct{}, 1), done: make(chan struct{}), idempotency: make(map[string]idempotencyRecord), reconciliations: make(map[string]reconciliationRecord)}
+	s := &Scheduler{manager: manager, maxQueue: cfg.MaxQueueSize, ttl: cfg.LeaseTTLDuration(), heartbeat: cfg.HeartbeatDuration(), maxLease: cfg.MaxLeaseDuration(), leases: make(map[string]*Lease), inferences: make(map[string]map[uint64]inferencePin), residenceTimers: make(map[string]*time.Timer), residenceDue: make(map[string]uint64), residenceGen: make(map[string]uint64), residenceDeadlines: make(map[string]time.Time), preloadState: preloadState, preloadError: make(map[string]string), preloadSuppressed: make(map[string]bool), changed: make(chan struct{}), ctx: ctx, cancel: cancel, wake: make(chan struct{}, 1), done: make(chan struct{}), idempotency: make(map[string]idempotencyRecord), reconciliations: make(map[string]reconciliationRecord), admissionRequests: make(map[string]admissionRequestState), admissionOptions: DefaultAdmissionOptions(), admissionDeadline: make(map[string]time.Time), admissionContexts: make(map[string]context.Context), admissionContextDeadlines: make(map[string]time.Time)}
 	return s
 }
 
 func (s *Scheduler) Request(model string) (Lease, error) {
+	return s.RequestWithRequestID("", model)
+}
+
+// RequestWithRequestID preserves a caller's request correlation when the
+// request is known (for example, an automatic inference). Empty IDs use the
+// generated lease ID, which is the stable correlation for lease requests.
+func (s *Scheduler) RequestWithRequestID(requestID, model string) (Lease, error) {
+	return s.requestWithRequestIDAndContext(nil, requestID, model)
+}
+
+// requestWithRequestIDAndContext is the single acquisition path. The caller
+// context is registered atomically with the lease creation so the worker can
+// never observe a lease without its context.
+func (s *Scheduler) requestWithRequestIDAndContext(ctx context.Context, requestID, model string) (Lease, error) {
 	if _, ok := s.manager.Models()[model]; !ok {
 		return Lease{}, fmt.Errorf("%w: model %s", ErrNotFound, model)
 	}
@@ -162,23 +199,28 @@ func (s *Scheduler) Request(model string) (Lease, error) {
 		return Lease{}, err
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closing {
+		s.mu.Unlock()
 		return Lease{}, ErrClosed
 	}
 	if s.recoveryBlocked {
+		s.mu.Unlock()
 		return Lease{}, ErrIdempotencyRecovery
 	}
 	if blocked, _ := s.manager.RecoveryRequired(); blocked {
+		s.mu.Unlock()
 		return Lease{}, ErrIdempotencyRecovery
 	}
 	if s.admissionGate != nil && s.admissionGate.AdmissionBlocked() {
+		s.mu.Unlock()
 		return Lease{}, ErrIdempotencyRecovery
 	}
 	if len(s.queue) >= s.maxQueue {
+		s.mu.Unlock()
 		return Lease{}, ErrQueueFull
 	}
 	if err := s.markDirtyLocked(); err != nil {
+		s.mu.Unlock()
 		return Lease{}, fmt.Errorf("persist scheduler activity: %w", err)
 	}
 	if s.preloadSuppressed[model] {
@@ -190,11 +232,24 @@ func (s *Scheduler) Request(model string) (Lease, error) {
 		s.preloadCancel()
 	}
 	l := &Lease{ID: id, Model: model, State: Queued, CreatedAt: time.Now().UTC()}
+	operation := s.admissionOperationLocked(model)
 	s.cancelResidenceLocked(model)
 	s.leases[id] = l
 	s.queue.push(id)
+	result := cloneLease(*l)
+	observer := s.admissionObserver
+	if requestID == "" {
+		requestID = id
+	}
+	s.trackAdmissionRequestLocked(id, requestID)
+	s.trackAdmissionContextLocked(id, ctx)
+	s.trackAdmissionDeadlineLocked(id, ctx)
+	if observer != nil {
+		observer.ObserveAdmission(requestID, model, operation)
+	}
 	s.notify()
-	return cloneLease(*l), nil
+	s.mu.Unlock()
+	return result, nil
 }
 
 func (s *Scheduler) Get(id string) (LeaseStatus, error) {
@@ -216,6 +271,99 @@ func (s *Scheduler) Get(id string) (LeaseStatus, error) {
 	return result, nil
 }
 
+// AdmissionFailure returns the typed admission error of a lease that was
+// terminated by the admission policy. It returns nil when the lease did not
+// fail for an admission reason.
+//
+// The HTTP layer uses it to map a terminal admission decision to the existing
+// HTTP contract without parsing free-form text.
+func (s *Scheduler) AdmissionFailure(id string) *AdmissionError {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	l, ok := s.leases[id]
+	if !ok {
+		return nil
+	}
+	return AdmissionFailure(l.Error)
+}
+
+// RequestWithContext is the context-propagating acquisition adapter. It keeps
+// the existing public signatures untouched while letting a caller contribute
+// its context and its absolute deadline to the effective admission deadline.
+//
+// The caller context is never retained after the acquisition terminates: the
+// Scheduler only observes it while the lease is QUEUED.
+func (s *Scheduler) RequestWithContext(ctx context.Context, requestID, model string) (Lease, error) {
+	return s.requestWithRequestIDAndContext(ctx, requestID, model)
+}
+
+// RequestIdempotentWithContext is the idempotent counterpart of
+// RequestWithContext. A replay reuses the original lease and the original
+// deadline; it never restarts the effective deadline.
+func (s *Scheduler) RequestIdempotentWithContext(ctx context.Context, key, model string) (LeaseStatus, bool, error) {
+	return s.requestIdempotentWithContext(ctx, key, model)
+}
+
+// trackAdmissionContextLocked registers the caller context and its absolute
+// deadline for a lease. It is called atomically with the lease creation.
+//
+// s.mu must be held.
+func (s *Scheduler) trackAdmissionContextLocked(leaseID string, ctx context.Context) {
+	if ctx == nil {
+		return
+	}
+	deadline, _ := ctx.Deadline()
+	s.admissionContexts[leaseID] = ctx
+	s.admissionContextDeadlines[leaseID] = deadline
+}
+
+// trackAdmissionDeadlineLocked computes and stores the effective admission
+// deadline at acceptance time. The wait is measured from the acceptance of
+// the acquisition and is never restarted by a reevaluation or a replay.
+//
+// s.mu must be held.
+func (s *Scheduler) trackAdmissionDeadlineLocked(leaseID string, ctx context.Context) {
+	if _, ok := s.admissionDeadline[leaseID]; ok {
+		return
+	}
+	deadline := time.Now().Add(s.admissionOptions.WaitTimeout)
+	if s.admissionOptions.ProxyQueueWaitTimeout > 0 {
+		if proxyDeadline := time.Now().Add(s.admissionOptions.ProxyQueueWaitTimeout); proxyDeadline.Before(deadline) {
+			deadline = proxyDeadline
+		}
+	}
+	if ctx != nil {
+		if callerDeadline, ok := ctx.Deadline(); ok && !callerDeadline.IsZero() && callerDeadline.Before(deadline) {
+			deadline = callerDeadline
+		}
+	}
+	s.admissionDeadline[leaseID] = deadline
+}
+
+// admissionContextForLocked returns the caller context and deadline recorded
+// for a lease. It is the Scheduler's own context registry; the installed
+// AdmissionContextProvider is consulted as a fallback.
+//
+// s.mu must be held.
+func (s *Scheduler) admissionContextForLocked(leaseID string) (context.Context, time.Time, bool) {
+	if ctx, ok := s.admissionContexts[leaseID]; ok && ctx != nil {
+		return ctx, s.admissionContextDeadlines[leaseID], true
+	}
+	if provider := s.admissionContext; provider != nil {
+		return provider.AdmissionContext(leaseID)
+	}
+	return nil, time.Time{}, false
+}
+
+// forgetAdmissionContextLocked drops the retained caller context of a lease
+// that reached a terminal state.
+//
+// s.mu must be held.
+func (s *Scheduler) forgetAdmissionContextLocked(leaseID string) {
+	delete(s.admissionContexts, leaseID)
+	delete(s.admissionContextDeadlines, leaseID)
+}
+
 // SetReleaseProtector installs the Runtime Core's single release guard.
 func (s *Scheduler) SetReleaseProtector(protector ReleaseProtector) {
 	s.mu.Lock()
@@ -227,6 +375,73 @@ func (s *Scheduler) SetAdmissionGate(gate AdmissionGate) {
 	s.mu.Lock()
 	s.admissionGate = gate
 	s.mu.Unlock()
+}
+
+func (s *Scheduler) SetAdmissionObserver(observer AdmissionObserver) {
+	s.mu.Lock()
+	s.admissionObserver = observer
+	s.mu.Unlock()
+}
+
+// SetAdmissionEvaluator installs the optional capacity admission dependency.
+// It is intentionally separate from AdmissionObserver: this evaluator is an
+// enforcement boundary, while the observer remains non-authoritative.
+//
+// It returns the previously installed evaluator, if any, so the caller can
+// release its resources and never leave two evaluators active.
+func (s *Scheduler) SetAdmissionEvaluator(evaluator AdmissionEvaluator) AdmissionEvaluator {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	previous := s.admissionEvaluator
+	s.admissionEvaluator = evaluator
+	return previous
+}
+
+// SetAdmissionOptions installs the Scheduler-owned admission policy. The
+// options are validated; an invalid policy is rejected and leaves the
+// previous policy untouched.
+func (s *Scheduler) SetAdmissionOptions(options AdmissionOptions) error {
+	normalized, err := options.Normalize()
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.admissionOptions = normalized
+	s.mu.Unlock()
+	return nil
+}
+
+// SetAdmissionContextProvider installs the source of caller contexts and
+// deadlines used to compute the effective admission deadline.
+func (s *Scheduler) SetAdmissionContextProvider(provider AdmissionContextProvider) {
+	s.mu.Lock()
+	s.admissionContext = provider
+	s.mu.Unlock()
+}
+
+func (s *Scheduler) trackAdmissionRequestLocked(leaseID, requestID string) {
+	s.nextAdmissionRequest++
+	s.admissionRequests[leaseID] = admissionRequestState{requestID: requestID, generation: s.nextAdmissionRequest}
+}
+
+func (s *Scheduler) admissionOperationLocked(model string) string {
+	if s.activeID != "" || s.preparingID != "" || len(s.queue) != 0 {
+		return "QUEUED"
+	}
+	if status, ok := s.manager.Models()[model]; ok && status.State == runtime.Ready && status.PID != 0 {
+		return "RESIDENT_REUSE"
+	}
+	return "NEW_LOAD"
+}
+
+// admissionClassificationLocked classifies the work the head would perform.
+// QUEUED is a Scheduler position, never a capacity operation: the evaluation
+// must observe NEW_LOAD or RESIDENT_REUSE with live evidence.
+func (s *Scheduler) admissionClassificationLocked(model string) string {
+	if instance, ready := s.manager.CurrentProcessForModel(model); ready && instance.ProcessInstanceID != "" {
+		return AdmissionOperationResidentReuse
+	}
+	return AdmissionOperationNewLoad
 }
 
 // RecoverEmptyStore clears only the startup dirty marker when the durable
@@ -262,6 +477,13 @@ func (s *Scheduler) WaitActive(ctx context.Context, id string) error {
 			return nil
 		}
 		if l.State == Failed || l.State == Cancelled || l.State == Expired || l.State == Completed {
+			// A lease terminated by the admission policy keeps its typed
+			// cause, so the caller can map it to the existing HTTP contract
+			// instead of a generic conflict.
+			if admissionErr := AdmissionFailure(l.Error); admissionErr != nil {
+				s.mu.Unlock()
+				return admissionErr
+			}
 			s.mu.Unlock()
 			return ErrConflict
 		}
@@ -496,6 +718,8 @@ func (s *Scheduler) release(id, requestID, model string) (Lease, error) {
 	*l = proposed
 	if proposed.State == Cancelled {
 		s.queue.remove(id)
+		s.forgetAdmissionContextLocked(id)
+		s.cancelAdmissionWaitLocked(id)
 	}
 	if cancelOperation {
 		s.operationCancel()
@@ -737,6 +961,11 @@ func (s *Scheduler) Shutdown(ctx context.Context) error {
 	s.closeOnce.Do(func() {
 		s.mu.Lock()
 		s.closing = true
+		s.admissionWait = nil
+		s.stopAdmissionTimerLocked()
+		s.admissionContexts = make(map[string]context.Context)
+		s.admissionContextDeadlines = make(map[string]time.Time)
+		s.admissionDeadline = make(map[string]time.Time)
 		for model, timer := range s.residenceTimers {
 			timer.Stop()
 			delete(s.residenceTimers, model)
@@ -932,7 +1161,38 @@ func (s *Scheduler) step() {
 		s.mu.Unlock()
 		return
 	}
-	if id, ok := s.queue.pop(); ok {
+	if s.admissionEvaluator != nil {
+		// Enforcement path: capture the logical FIFO head without removing it,
+		// evaluate outside s.mu, then revalidate and commit under s.mu.
+		// The head is never removed by the raw queue.pop below while an
+		// evaluator is installed: only admitHeadLocked may commit it.
+		id, outcome := s.admitHeadLocked()
+		switch outcome {
+		case admissionProceed:
+			if id != "" {
+				// The head was committed to PREPARING by admitHeadLocked.
+				l := s.leases[id]
+				if l == nil {
+					s.mu.Unlock()
+					s.notify()
+					return
+				}
+				opCtx, cancel := context.WithCancel(s.ctx)
+				s.operationCancel = cancel
+				model := l.Model
+				s.mu.Unlock()
+				err := s.activate(opCtx, id, model)
+				cancel()
+				s.finishActivation(id, err)
+				return
+			}
+			// No head was eligible. The queue is empty: continue with the
+			// preload and unload handling below.
+		case admissionWaiting, admissionReject:
+			s.mu.Unlock()
+			return
+		}
+	} else if id, ok := s.queue.pop(); ok {
 		l := s.leases[id]
 		if l == nil || l.State != Queued {
 			s.mu.Unlock()
@@ -974,6 +1234,22 @@ func (s *Scheduler) step() {
 	if unload && !manualModel {
 		s.stopModel(unloadModel)
 	}
+}
+
+func (s *Scheduler) admissionHeadLocked() (AdmissionRequest, bool) {
+	if len(s.queue) == 0 {
+		return AdmissionRequest{}, false
+	}
+	id := s.queue[0]
+	lease := s.leases[id]
+	if lease == nil || lease.State != Queued {
+		return AdmissionRequest{}, false
+	}
+	state, ok := s.admissionRequests[id]
+	if !ok {
+		return AdmissionRequest{}, false
+	}
+	return AdmissionRequest{ModelID: lease.Model, RequestID: state.requestID, LeaseID: id, Operation: s.admissionClassificationLocked(lease.Model), Generation: state.generation}, true
 }
 
 func (s *Scheduler) hasQueuedModelLocked(model string) bool {
@@ -1064,6 +1340,7 @@ func (s *Scheduler) finishActivation(id string, err error) {
 	defer s.mu.Unlock()
 	l := s.leases[id]
 	s.preparingID, s.operationCancel = "", nil
+	s.forgetAdmissionContextLocked(id)
 	if l == nil {
 		s.notify()
 		return
@@ -1157,6 +1434,11 @@ func (s *Scheduler) stopModel(model string) {
 func (s *Scheduler) cleanup() {
 	s.mu.Lock()
 	cancelled := append([]string(nil), s.queue...)
+	s.admissionWait = nil
+	s.stopAdmissionTimerLocked()
+	s.admissionContexts = make(map[string]context.Context)
+	s.admissionContextDeadlines = make(map[string]time.Time)
+	s.admissionDeadline = make(map[string]time.Time)
 	if s.activeID != "" {
 		cancelled = append(cancelled, s.activeID)
 	}

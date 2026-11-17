@@ -17,8 +17,20 @@ scheduler:
 
 # Dry-run only: these margins never reject requests or change Scheduler state.
 capacity:
+  shadow_mode: true
   system_margin_percent: 10
   gpu_margin_percent: 10
+  # Capacity admission enforcement. Disabled by default: with enabled=false no
+  # evaluator is installed, the Scheduler keeps its previous behavior and the
+  # HTTP responses are unchanged. Enabling it installs the read-only capacity
+  # evaluator on the Scheduler; it never starts a model by itself.
+  admission:
+    enabled: false
+    on_insufficient: wait
+    on_unknown: allow
+    wait_timeout: "5m"
+    reevaluation_interval: "2s"
+    max_snapshot_age: "6s"
 
 proxy:
   queue_wait_timeout: "5m"

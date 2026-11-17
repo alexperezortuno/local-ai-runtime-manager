@@ -240,6 +240,25 @@ func TestModelStatesAndMultipleConfiguredModels(t *testing.T) {
 	}
 }
 
+func TestModelsRejectPIDReuseFromRuntimeEvidence(t *testing.T) {
+	m := testManager(t, "normal", 1, time.Second, 100*time.Millisecond)
+	if err := m.Start(context.Background(), "model-1"); err != nil {
+		t.Fatal(err)
+	}
+	m.mu.Lock()
+	p := m.procs["model-1"]
+	originalStart := p.identity.Start
+	p.identity.Start = "reused-pid-start"
+	m.mu.Unlock()
+	instances := m.ProcessInstancesWithLiveIdentity()
+	m.mu.Lock()
+	p.identity.Start = originalStart
+	m.mu.Unlock()
+	if len(instances) != 1 || instances[0].ProcessIdentityStatus == "VERIFIED" || instances[0].OwnershipStatus == "OWNED_VERIFIED" {
+		t.Fatalf("PID reuse was accepted: %+v", instances)
+	}
+}
+
 func testManager(t *testing.T, mode string, modelCount int, startup, shutdown time.Duration) *Manager {
 	t.Helper()
 	dir := t.TempDir()
