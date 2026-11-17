@@ -6,9 +6,9 @@ MODEL="commit"
 
 while IFS= read -r -d '' file; do
     echo
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "Archivo: $file"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    #echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    #echo "Archivo: $file"
+    #echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
     diff=$(git diff HEAD -- "$file")
 

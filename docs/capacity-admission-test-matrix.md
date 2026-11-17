@@ -2,15 +2,22 @@
 
 ## Alcance y regla de estado
 
-Esta matriz define pruebas de caracterización y gates para una futura política
-de admisión basada en memoria. No añade pruebas al árbol de código en esta
-tarea. `admission.enabled` no existe todavía en el parser operativo y ningún
-caso de enforcement puede marcarse `PASS`.
+Esta matriz define pruebas de caracterización y gates para la política de
+admisión basada en memoria.
+
+**Estado actual (LARM-007.3.4b):** el enforcement está implementado y probado
+con fakes deterministas, y está conectado al Scheduler. **No** está habilitado
+en configuraciones operativas (`capacity.admission.enabled` sigue siendo
+`false` y el Scheduler no instala ningún evaluador por defecto) y la
+compatibilidad HTTP/OpenAI/SSE sigue pendiente de LARM-007.3.4c.
 
 Estados usados abajo (el primero es la clasificación principal del caso):
 
 - **Caracterización actual:** puede verificarse contra el código existente sin
   afirmar enforcement.
+- **`PASS (fake)`:** el enforcement está implementado y probado con evaluadores
+  falsos deterministas, dentro del Scheduler. No implica habilitación
+  operativa ni contrato HTTP.
 - **Pendiente de enforcement:** debe permanecer `NOT IMPLEMENTED` hasta que se
   apruebe e implemente la política.
 - **Gate de regresión:** cuando exista la implementación, debe pasar además de
@@ -30,33 +37,40 @@ La columna **estado** separa lo que puede ser `PASS` en el checkout actual de
 lo que debe permanecer `NOT IMPLEMENTED`. Un resultado de fixture o de
 caracterización nunca convierte enforcement futuro en `PASS`.
 
+**Estado por entrega (LARM-007.3.4b):** el enforcement está implementado y
+probado con fakes, y está **conectado al Scheduler**. No está habilitado en
+configuraciones reales y la compatibilidad HTTP/SSE sigue pendiente
+(LARM-007.3.4c). Los casos marcados `PASS (fake)` se validaron con evaluadores
+falsos deterministas; los marcados `NOT IMPLEMENTED` dependen de la
+integración HTTP o de la habilitación operativa.
+
 | ID / estado | Precondiciones | Estímulo | Resultado esperado | Criterio de aceptación |
 |---|---|---|---|---|
-| **ADMISSION-01**<br>Ahora: caracterización | Modelo configurado, nueva carga, snapshot `AVAILABLE` con memoria suficiente, Recovery normal. | Solicitar `NEW_LOAD` con request/lease identificables. | Planner puede producir `FIT`; no autoriza activación en el checkout actual. | Evidencia contiene modelo, request, operación, snapshot, edad, bytes, fuente, justificación y timestamp. Enforcement: `NOT IMPLEMENTED`. |
-| **ADMISSION-02**<br>Ahora: caracterización; futuro: enforcement | Nueva carga; snapshot `AVAILABLE` con memoria menor al requerimiento. | Evaluar el elemento en cabeza FIFO. | Planner produce `INSUFFICIENT`; bloquear `Start` es comportamiento futuro. | No se inventa reserva ni decremento de memoria. La espera/rechazo futuro permanece `NOT IMPLEMENTED`. |
-| **ADMISSION-03**<br>Ahora: caracterización + gate | Nueva carga; snapshot `UNAVAILABLE`, bytes nulos o Planner sin metadata. | Evaluar. | `UNKNOWN`, nunca `FIT`; con `on_unknown=allow` futuro, el flujo actual continúa. | Causa visible y Shadow/Scheduler no bloqueantes. Enforcement: `NOT IMPLEMENTED`. |
-| **ADMISSION-04**<br>Ahora: caracterización; futuro: enforcement | Modelo `READY`, proceso administrado con identidad viva, solicitud del mismo modelo. | Observar `RESIDENT_REUSE` y activar por la ruta actual. | El comportamiento actual puede reutilizar; el contrato futuro exige identidad, ownership, Recovery, Execution Gate y lease válidos. | `ProcessInstanceID`, identidad de inicio, modelo y estado se registran. La validación de admisión es `NOT IMPLEMENTED`. |
-| **ADMISSION-05**<br>Ahora: caracterización + gate | Una lease activa/preparando o una solicitud delante; segunda solicitud en cola. | Observar la segunda como `QUEUED`. | Shadow registra sin cambiar FIFO ni esperar al Planner. | `queue_position` y orden no cambian; no se marca enforcement de capacidad como `PASS`. |
-| **ADMISSION-06**<br>Ahora: NOT IMPLEMENTED; futuro: enforcement | Tres solicitudes A, B, C en FIFO; A tiene memoria insuficiente. | Evaluar A y dejarla en `WAITING_CAPACITY`. | B y C no adelantan A; A conserva lease `QUEUED`, no publica `PREPARING`, y reevalúa o termina. | Orden A→B→C, posición lógica estable y ningún trabajo posterior mientras A ocupa la cabeza. |
-| **ADMISSION-07**<br>Ahora: NOT IMPLEMENTED; futuro: enforcement | A espera por `INSUFFICIENT`; medición posterior pasa a `FIT`; lease sigue no terminal. | Publicar medición y reevaluar A. | A avanza una sola vez a comprobación final y luego a la activación normal. | Nuevo `evaluation_id`/timestamp; no se usa `FIT` antiguo, no se duplica carga y no hay lock durante evaluación. |
-| **ADMISSION-08**<br>Ahora: NOT IMPLEMENTED; futuro: enforcement | A espera; nuevas mediciones siguen insuficientes. | Reevaluar hasta el límite. | A permanece sin `PREPARING`/`ACTIVE`; al vencer devuelve `ErrAdmissionTimeout` y la lease `QUEUED` termina por la ruta existente, normalmente `CANCELLED`. | Espera finita, sin busy loop, heartbeat ficticio, proceso ni goroutines ilimitadas; FIFO consistente. |
-| **ADMISSION-09**<br>Ahora: NOT IMPLEMENTED; futuro: enforcement | A espera con `wait_timeout`, `queue_wait_timeout` y deadline de contexto posibles. | Vencer `.a` admisión, `.b` proxy, `.c` contexto o `.d` simultáneamente. | Rige el primer deadline absoluto aplicable; devuelve timeout tipado y no extiende otro contrato. La lease se limpia por la ruta existente. | Se conserva deadline/causa; cancelación y Recovery confirmados interrumpen antes de un `FIT`; una carrera se decide en el commit serializado. |
-| **ADMISSION-10**<br>Ahora: NOT IMPLEMENTED; futuro: enforcement | A espera; cancelación de contexto/lease concurrente con una reevaluación `FIT`. | Cancelar y entregar `FIT` en la misma ventana. | Gana cancelación si se confirma antes del commit; no hay `Start` posterior. | Tie-break definido por commit serializado; operación idempotente, sin huérfanos ni proceso. |
-| **ADMISSION-11**<br>Ahora: gate; futuro: enforcement | Lease `ACTIVE` con TTL corto; otra solicitud espera capacidad. | Dejar expirar la lease activa durante la espera. | La lease expirada no es permiso; la siguiente solicitud sigue residencia/cola normales. | No se renueva lease por esperar, no hay heartbeat `QUEUED` y no se reactiva una terminal. |
+| **ADMISSION-01**<br>Ahora: caracterización | Modelo configurado, nueva carga, snapshot `AVAILABLE` con memoria suficiente, Recovery normal. | Solicitar `NEW_LOAD` con request/lease identificables. | Planner puede producir `FIT`; no autoriza activación en el checkout actual. | Evidencia contiene modelo, request, operación, snapshot, edad, bytes, fuente, justificación y timestamp. Enforcement: `PASS (fake)` vía `internal/admission` + `internal/capacity`. |
+| **ADMISSION-02**<br>Ahora: `PASS (fake)` | Nueva carga; snapshot `AVAILABLE` con memoria menor al requerimiento. | Evaluar el elemento en cabeza FIFO. | `INSUFFICIENT` bloquea el inicio: la lease permanece `QUEUED`, en posición 1, sin `PREPARING` y sin `manager.Start`. | `TestADMISSION02InsufficientCapacityBlocksNewLoad`. No se inventa reserva ni decremento de memoria. |
+| **ADMISSION-03**<br>Ahora: caracterización + gate | Nueva carga; snapshot `UNAVAILABLE`, bytes nulos o Planner sin metadata. | Evaluar. | `UNKNOWN`, nunca `FIT`; con `on_unknown=allow` el flujo continúa. | Causa visible y Shadow/Scheduler no bloqueantes. Enforcement: `PASS (fake)` (`TestADMISSION19EvaluatorFailureIsUnknownNotPreventive`). |
+| **ADMISSION-04**<br>Ahora: `PASS (fake)` | Modelo `READY`, proceso administrado con identidad viva, solicitud del mismo modelo. | Observar `RESIDENT_REUSE` y activar por la ruta actual. | La reutilización exige identidad OS, `ProcessInstanceID`, modelo, ownership, Recovery, Execution Gate y lease válidos. | `TestAdmissionResidentReuseUsesLiveIdentity`. La memoria incremental de inferencia sigue siendo `UNKNOWN` por falta de evidencia. |
+| **ADMISSION-05**<br>Ahora: caracterización + gate | Una lease activa/preparando o una solicitud delante; segunda solicitud en cola. | Observar la segunda como `QUEUED`. | Shadow registra sin cambiar FIFO ni esperar al Planner. | `queue_position` y orden no cambian; Shadow Mode no cambió. |
+| **ADMISSION-06**<br>Ahora: `PASS (fake)` | Tres solicitudes A, B, C en FIFO; A tiene memoria insuficiente. | Evaluar A y dejarla en `WAITING_CAPACITY`. | B y C no adelantan A; A conserva lease `QUEUED`, no publica `PREPARING`, y reevalúa o termina. | `TestADMISSION06FIFOHeadBlocksLaterRequests`. Orden A→B→C, posición lógica estable y ningún trabajo posterior mientras A ocupa la cabeza. |
+| **ADMISSION-07**<br>Ahora: `PASS (fake)` | A espera por `INSUFFICIENT`; medición posterior pasa a `FIT`; lease sigue no terminal. | Publicar medición y reevaluar A. | A avanza una sola vez a comprobación final y luego a la activación normal. | `TestADMISSION07ReevaluationAllowsContinuation`. Nuevo `evaluation_id`/timestamp; no se usa `FIT` antiguo, no se duplica carga y no hay lock durante evaluación. |
+| **ADMISSION-08**<br>Ahora: `PASS (fake)` | A espera; nuevas mediciones siguen insuficientes. | Reevaluar hasta el límite. | A permanece sin `PREPARING`/`ACTIVE`; al vencer la lease `QUEUED` termina por la ruta existente como `CANCELLED` con causa de timeout. | `TestADMISSION08TimeoutEndsWait`. Espera finita, sin busy loop, heartbeat ficticio, proceso ni goroutines ilimitadas; FIFO consistente. |
+| **ADMISSION-09**<br>Ahora: `PASS (fake)` parcial | A espera con `wait_timeout`, `queue_wait_timeout` y deadline de contexto posibles. | Vencer `.a` admisión, `.b` proxy, `.c` contexto o `.d` simultáneamente. | Rige el primer deadline absoluto aplicable; devuelve timeout tipado y no extiende otro contrato. La lease se limpia por la ruta existente. | `TestADMISSION09EffectiveDeadlinePrecedence` (proxy) y `TestADMISSION09bCallerContextDeadlineWins` (contexto). El deadline del proxy **no está conectado** al handler: el proxy sigue usando su propio `queue_wait_timeout`. |
+| **ADMISSION-10**<br>Ahora: `PASS (fake)` | A espera; cancelación de contexto/lease concurrente con una reevaluación `FIT`. | Cancelar y entregar `FIT` en la misma ventana. | Gana cancelación si se confirma antes del commit; no hay `Start` posterior. | `TestADMISSION10CancellationBeatsConcurrentFit`. Tie-break definido por commit serializado; operación idempotente, sin huérfanos ni proceso. |
+| **ADMISSION-11**<br>Ahora: gate | Lease `ACTIVE` con TTL corto; otra solicitud espera capacidad. | Dejar expirar la lease activa durante la espera. | La lease expirada no es permiso; la siguiente solicitud sigue residencia/cola normales. | `TestAdmissionWaitDoesNotStartOrExtend`. No se renueva lease por esperar, no hay heartbeat `QUEUED` y no se reactiva una terminal. |
 | **ADMISSION-12**<br>Ahora: caracterización + gate | Lease externa `QUEUED` o `PREPARING`; heartbeat solo aplica a `ACTIVE`. | Enviar heartbeat antes de `ACTIVE` y después de expirar. | Se conserva conflicto/expiración actual; evaluación no cambia estados. | No se mantiene una lease `ACTIVE` artificial durante espera. |
-| **ADMISSION-13**<br>Ahora: caracterización + gate; futuro: enforcement | `AdmissionGate`/Registry o Runtime en `RECOVERY_REQUIRED`; snapshot `FIT`. | Solicitar nueva carga o reutilización. | Recovery precede a `FIT`; no se admite ni se inicia. | El bloqueo actual sigue antes de `Start`, sin adoptar ni detener proceso. Rama de admisión: `NOT IMPLEMENTED`. |
-| **ADMISSION-14**<br>Ahora: NOT IMPLEMENTED; futuro: enforcement | A espera; LARM termina abruptamente antes de reevaluar. | Reiniciar con store sucio o estado no terminal. | Cola no se reanuda; Recovery bloquea y no relanza. | No duplicación/restauración de lease o proceso; diagnóstico con IDs históricos y fail-closed. |
-| **ADMISSION-15**<br>Ahora: NOT IMPLEMENTED; futuro: enforcement | Snapshot `FIT`; A se cancela o se reevalúa antes de terminar la evaluación anterior. | Entregar evaluación tardía o consumir memoria entre evaluación y `Start`. | Resultado tardío se descarta; fallo real sigue siendo Runtime/carga. | Ningún `FIT` tardío autoriza `Start`; se registra TOCTOU sin afirmar garantía de capacidad. |
-| **ADMISSION-16**<br>Ahora: NOT IMPLEMENTED; futuro: enforcement | A y B son nuevas cargas en la misma instancia; pool/cola del evaluador acotados. | Evaluarlas concurrentemente y saturar el límite. | Worker decide FIFO; B espera/reintenta acotadamente o recibe `UNKNOWN`, sin reserva ficticia. | Límite verificable, sin goroutines ilimitadas ni dos `Start` fuera de garantías; FIFO A→B. |
-| **ADMISSION-17**<br>Ahora: NOT IMPLEMENTED; futuro: enforcement | `RESIDENT_REUSE` observado con `ProcessInstanceID=P1`; antes de ejecutar cambia a P2/no `READY`. | Activar con evaluación de P1. | Se rechaza reutilización silenciosa y se reclasifica como nueva carga o `UNKNOWN`. | Mismatch detectado; no se elude Recovery ni la lease. |
+| **ADMISSION-13**<br>Ahora: `PASS (fake)` | `AdmissionGate`/Registry o Runtime en `RECOVERY_REQUIRED`; snapshot `FIT`. | Solicitar nueva carga o reutilización. | Recovery precede a `FIT`; no se admite ni se inicia. | `TestADMISSION13RecoveryPrecedesCapacity` y `TestAdmissionGateBlocksBeforeEvaluation`. El bloqueo sigue antes de `Start`, sin adoptar ni detener proceso. |
+| **ADMISSION-14**<br>Ahora: `PASS (fake)` | A espera; LARM termina abruptamente antes de reevaluar. | Reiniciar con store sucio o estado no terminal. | Cola no se reanuda; Recovery bloquea y no relanza. | `TestADMISSION14RestartDuringWaitDoesNotResume`. No duplicación/restauración de lease o proceso; fail-closed. |
+| **ADMISSION-15**<br>Ahora: `PASS (fake)` | Snapshot `FIT`; A se cancela o se reevalúa antes de terminar la evaluación anterior. | Entregar evaluación tardía o consumir memoria entre evaluación y `Start`. | Resultado tardío se descarta; fallo real sigue siendo Runtime/carga. | `TestADMISSION15LateResultIsDiscarded`. Ningún `FIT` tardío autoriza `Start`. |
+| **ADMISSION-16**<br>Ahora: `PASS (fake)` | A y B son nuevas cargas en la misma instancia; pool/cola del evaluador acotados. | Evaluarlas concurrentemente y saturar el límite. | Worker decide FIFO; B espera/reintenta acotadamente o recibe `UNKNOWN`, sin reserva ficticia. | `TestADMISSION16ConcurrencyIsBounded`, `TestAdmissionUsesASingleReevaluationTimer`. Límite verificable, sin goroutines ilimitadas ni dos `Start` fuera de garantías. |
+| **ADMISSION-17**<br>Ahora: `PASS (fake)` | `RESIDENT_REUSE` observado con `ProcessInstanceID=P1`; antes de ejecutar cambia a P2/no `READY`. | Activar con evaluación de P1. | Se rechaza reutilización silenciosa y se reclasifica como nueva carga o `UNKNOWN`. | `TestADMISSION17ResidentIdentityChangeDiscardsEvaluation` y la comprobación de identidad viva en `admissionCommitAllowedLocked`. |
 | **ADMISSION-18**<br>Ahora: caracterización + gate | Observer con intervalo conocido; snapshot más antiguo que `max_snapshot_age` (o tres intervalos actual). | Evaluar nueva carga. | `STALE` produce `UNKNOWN`, no `FIT`. | Edad, estado y fuente visibles; Shadow no bloquea y Scheduler no cambia. |
-| **ADMISSION-19**<br>Ahora: NOT IMPLEMENTED; futuro: enforcement | Planner retorna panic, error o no responde; subcaso `.a` llena el pool y `.b` cancela. | Ejecutar evaluación y cancelar una evaluación en curso. | `UNKNOWN` con causa conservada, `on_unknown` aplicable y worker estable. | Timeout, concurrencia y cola acotados; sin acumulación de goroutines ni mutación desde `capacity`. |
-| **ADMISSION-20**<br>Ahora: caracterización | `capacity.shadow_mode=true`, Planner fixture y Scheduler normal. | Crear solicitudes `NEW_LOAD`, `RESIDENT_REUSE` y `QUEUED`. | Shadow registra resultados async; ninguna decisión operativa cambia. | Historial incluye operación/veredicto/fuente/justificación; enforcement no puede ser `PASS`. |
+| **ADMISSION-19**<br>Ahora: `PASS (fake)` | Planner retorna panic, error o no responde; subcaso `.a` llena el pool y `.b` cancela. | Ejecutar evaluación y cancelar una evaluación en curso. | `UNKNOWN` con causa conservada, `on_unknown` aplicable y worker estable. | `TestADMISSION19EvaluatorFailureIsUnknownNotPreventive` y `TestADMISSION19bEvaluatorPanicDoesNotBreakWorker`. El panic se aísla en el límite del Scheduler; el pool acotado vive en `internal/capacity`. |
+| **ADMISSION-20**<br>Ahora: caracterización | `capacity.shadow_mode=true`, Planner fixture y Scheduler normal. | Crear solicitudes `NEW_LOAD`, `RESIDENT_REUSE` y `QUEUED`. | Shadow registra resultados async; ninguna decisión operativa cambia. | Historial incluye operación/veredicto/fuente/justificación; Shadow Mode no se modificó. |
 | **ADMISSION-21**<br>Ahora: caracterización + gate | `capacity.shadow_mode=false`, misma configuración y solicitudes. | Repetir ADMISSION-20. | No se instala observer Shadow; FIFO/leases/lifecycle no cambian. | Diferencia solo observacional; sin endpoint ni mutación adicional. |
-| **ADMISSION-22**<br>Ahora: gate de regresión | Configuración actual sin `admission.enabled` (equivalente al futuro `false`). | Secuencias nuevas, resident reuse, cancelación, expiry y Recovery existentes. | Resultados idénticos al baseline. | Comparar estados, posiciones, errores, Runtime y procesos; cualquier diferencia es regresión. |
-| **ADMISSION-23**<br>Ahora: gate de regresión; futuro: enforcement | Cliente OpenAI compatible con/sin `X-LARM-Lease-ID`; HTTP y SSE. | `.a` chat/embeddings no streaming; `.b` chat streaming SSE; `.c` timeout/cancelación en cola y durante SSE. | Se conservan leases, HTTP, headers, JSON de error y reglas SSE actuales cuando admission está deshabilitado. | Sin headers/endpoints nuevos; espera usa timeout actual; tras headers/primer evento no se reescribe status. Enforcement: `NOT IMPLEMENTED`. |
-| **ADMISSION-24**<br>Ahora: validación de plataforma; futuro: NOT IMPLEMENTED | Fixture Linux con RAM y `nvidia-smi` sintéticos: VRAM suficiente/insuficiente, `PARTIAL` y proveedor ausente. | `.a` evaluar `gpu_layers` y verificar dominios; `.b` intentar política de espera/bloqueo. | `.a` separa RAM/VRAM y clasifica según evidencia; `.b` no bloquea ni espera en este checkout. | No GPU real; no se inventa VRAM; `PARTIAL` sin todos los dominios requeridos es `UNKNOWN`; `.a` puede ser `PASS`, `.b` es `NOT IMPLEMENTED`. |
-| **ADMISSION-25**<br>Ahora: validación de plataforma; futuro: NOT IMPLEMENTED | macOS arm64 con memoria unificada; sin proveedor NVIDIA. | `.a` evaluar nueva carga, `RESIDENT_REUSE`, stale/unavailable; `.b` intentar enforcement. | `.a` usa un presupuesto unificado; ausencia de GPU dedicada no causa `UNKNOWN` por sí sola; stale/unavailable sí. `.b` no activa política. | Validar provider Darwin y `architecture: unified`, sin modelo real/NVIDIA; `.a` puede ser `PASS`, `.b` es `NOT IMPLEMENTED`. |
+| **ADMISSION-22**<br>Ahora: `PASS (fake)` | Configuración actual sin `admission.enabled` (equivalente al futuro `false`). | Secuencias nuevas, resident reuse, cancelación, expiry y Recovery existentes. | Resultados idénticos al baseline. | `TestADMISSION22DisabledAdmissionKeepsCurrentBehavior` más la suite completa del Scheduler y de la API. |
+| **ADMISSION-23**<br>Ahora: gate de regresión; enforcement HTTP `NOT IMPLEMENTED` | Cliente OpenAI compatible con/sin `X-LARM-Lease-ID`; HTTP y SSE. | `.a` chat/embeddings no streaming; `.b` chat streaming SSE; `.c` timeout/cancelación en cola y durante SSE. | Se conservan leases, HTTP, headers, JSON de error y reglas SSE actuales cuando admission está deshabilitado. | Sin headers/endpoints nuevos; espera usa timeout actual; tras headers/primer evento no se reescribe status. Enforcement HTTP/SSE: `NOT IMPLEMENTED` (LARM-007.3.4c). |
+| **ADMISSION-24**<br>Ahora: validación de plataforma; enforcement `NOT IMPLEMENTED` | Fixture Linux con RAM y `nvidia-smi` sintéticos: VRAM suficiente/insuficiente, `PARTIAL` y proveedor ausente. | `.a` evaluar `gpu_layers` y verificar dominios; `.b` intentar política de espera/bloqueo. | `.a` separa RAM/VRAM y clasifica según evidencia; `.b` no bloquea ni espera en este checkout. | No GPU real; no se inventa VRAM; `PARTIAL` sin todos los dominios requeridos es `UNKNOWN`; `.a` es `PASS`, `.b` es `NOT IMPLEMENTED` (fixture NVIDIA no disponible en este checkout). |
+| **ADMISSION-25**<br>Ahora: validación de plataforma; enforcement `PASS (fake)` | macOS arm64 con memoria unificada; sin proveedor NVIDIA. | `.a` evaluar nueva carga, `RESIDENT_REUSE`, stale/unavailable; `.b` intentar enforcement. | `.a` usa un presupuesto unificado; ausencia de GPU dedicada no causa `UNKNOWN` por sí sola; stale/unavailable sí. `.b` el enforcement con fakes no habilita la política. | `TestAdmissionResidentReuseUsesLiveIdentity` y la suite de `internal/capacity`. Sin modelo real/NVIDIA. |
 
 ## 3. Fixtures y aislamiento
 
@@ -89,16 +103,10 @@ ADMISSION-25 usa el provider Darwin y sus pruebas disponibles. Debe comprobar
 sea tratado como VRAM cero. No requiere privilegios ni ejecución de
 `llama-server`.
 
-## 4. Evidencia y comandos cuando se implemente
+## 4. Evidencia y comandos
 
-Para este entregable solo se debe validar documentación:
-
-```bash
-git diff --check
-```
-
-Si una futura iteración agrega pruebas de caracterización, además debe ejecutar
-sin hardware especial:
+LARM-007.3.4b agrega pruebas de enforcement al árbol de código. La validación
+se ejecuta sin hardware especial:
 
 ```bash
 go test ./... -count=1
@@ -107,19 +115,28 @@ go vet ./...
 git diff --check
 ```
 
-La evidencia debe separar:
+Pruebas de enforcement (fakes deterministas, sin modelo real, sin NVIDIA):
+
+- `internal/scheduler/admission_enforce_test.go`
+- `internal/admission/adapter_test.go`
+
+La evidencia separa:
 
 1. `PASS` de contratos actuales (FIFO, leases, Recovery, Shadow, Planner y API
    OpenAI sin enforcement).
-2. `NOT IMPLEMENTED` de los casos que exigen bloquear, esperar, reevaluar o
-   cancelar por capacidad.
-3. `FAIL`/`UNKNOWN` del Planner como datos esperados, no como fallos de
+2. `PASS (fake)` del enforcement implementado y conectado al Scheduler
+   (ADMISSION-02, 04, 06–10, 13–17, 19, 22 y las subcobservaciones de
+   plataforma de ADMISSION-25).
+3. `NOT IMPLEMENTED` de lo que depende de la integración HTTP/OpenAI/SSE
+   (ADMISSION-23 y la parte `.b` de ADMISSION-24) y de la habilitación
+   operativa.
+4. `FAIL`/`UNKNOWN` del Planner como datos esperados, no como fallos de
    infraestructura.
 
-No se debe marcar como `PASS` la parte de enforcement de ADMISSION-02, 04,
-06–10, 11, 13–17, 19, 23, 24.b o 25.b por el mero hecho de que exista un
-fixture. Las partes de caracterización actual, gates y validación de plataforma
-pueden tener `PASS` independiente cuando su evidencia corresponda.
+No se marca como `PASS` la parte de enforcement de ADMISSION-23 ni 24.b: esos
+casos dependen de la integración HTTP pendiente. La habilitación operativa de
+`capacity.admission.enabled` sigue requiriendo aprobación explícita y no está
+cubierta por ningún `PASS` de esta matriz.
 
 ## 5. Gates de no regresión
 
