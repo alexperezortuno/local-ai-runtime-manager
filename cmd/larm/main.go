@@ -149,6 +149,9 @@ func main() {
 // nothing: the Scheduler keeps its previous behavior, no admission worker is
 // started, no additional snapshot is taken and no HTTP response changes.
 func installAdmission(sched *scheduler.Scheduler, handler http.Handler, cfg config.Config) (*admission.Wiring, error) {
+	if !cfg.Capacity.Admission.Enabled {
+		return nil, nil
+	}
 	plannerProvider, ok := handler.(interface{ Planner() capacity.PlanSource })
 	if !ok {
 		return nil, errors.New("capacity admission requires a capacity planner")

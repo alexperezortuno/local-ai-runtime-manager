@@ -423,6 +423,27 @@ func TestRecoveryEndpointsAreReadOnlyAndMetadataOnly(t *testing.T) {
 	_ = response.Body.Close()
 }
 
+func TestJournalCapacityHandlerExposesItsExistingPlanner(t *testing.T) {
+	manager, sched := apiTestScheduler(t)
+	journal, err := inference.OpenJournal(inference.JournalOptions{Path: filepath.Join(t.TempDir(), "recovery.json")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, _, _, err := NewHandlerWithJournalAndRecoveryAndCapacity(manager, sched, config.ProxyConfig{}, journal, capacity.DefaultOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = handler.(interface{ Close() error }).Close() })
+
+	plannerProvider, ok := handler.(interface{ Planner() capacity.PlanSource })
+	if !ok || plannerProvider.Planner() == nil {
+		t.Fatal("journal capacity handler did not expose its existing planner")
+	}
+	if got := handler.(*Handler).Planner(); got != plannerProvider.Planner() {
+		t.Fatal("planner access did not return the handler-owned planner")
+	}
+}
+
 func apiTestScheduler(t *testing.T) (*runtime.Manager, *scheduler.Scheduler) {
 	return apiTestSchedulerWithTTL(t, "5s")
 }

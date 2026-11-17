@@ -9,12 +9,14 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"syscall"
 	"testing"
 	"time"
 
 	"local-ai-runtime/internal/config"
+	"local-ai-runtime/internal/corecontract"
 )
 
 func TestMain(m *testing.M) {
@@ -256,6 +258,48 @@ func TestModelsRejectPIDReuseFromRuntimeEvidence(t *testing.T) {
 	m.mu.Unlock()
 	if len(instances) != 1 || instances[0].ProcessIdentityStatus == "VERIFIED" || instances[0].OwnershipStatus == "OWNED_VERIFIED" {
 		t.Fatalf("PID reuse was accepted: %+v", instances)
+	}
+}
+
+func TestProcessInstancesReturnsDeterministicSortedCopies(t *testing.T) {
+	m := NewManager(config.Config{})
+	t.Cleanup(func() { _ = m.Shutdown(context.Background()) })
+
+	instances := []corecontract.ProcessInstance{
+		{ProcessInstanceID: "process-c", ModelID: "model-c", ConfigFingerprint: "sha256:c", State: corecontract.ProcessFailed, RecoveryState: corecontract.RecoveryNormal, InferenceIDs: []string{"inference-c"}},
+		{ProcessInstanceID: "process-a", ModelID: "model-a", ConfigFingerprint: "sha256:a", State: corecontract.ProcessReady, RecoveryState: corecontract.RecoveryNormal, Evidence: []corecontract.TerminalEvidence{{EvidenceID: "evidence-a"}}},
+		{ProcessInstanceID: "process-b", ModelID: "model-b", ConfigFingerprint: "sha256:b", State: corecontract.ProcessRecoveryRequired, RecoveryState: corecontract.RecoveryRequired, TerminationSignals: []string{"SIGTERM"}},
+	}
+	m.mu.Lock()
+	for _, instance := range instances {
+		m.processes[instance.ProcessInstanceID] = instance
+	}
+	before := make(map[string]corecontract.ProcessInstance, len(m.processes))
+	for id, instance := range m.processes {
+		before[id] = instance
+	}
+	m.mu.Unlock()
+
+	wantIDs := []string{"process-a", "process-b", "process-c"}
+	for repeat := 0; repeat < 20; repeat++ {
+		got := m.ProcessInstances()
+		if len(got) != len(wantIDs) {
+			t.Fatalf("iteration %d returned %d instances, want %d", repeat, len(got), len(wantIDs))
+		}
+		for i, wantID := range wantIDs {
+			if got[i].ProcessInstanceID != wantID {
+				t.Fatalf("iteration %d order[%d] = %q, want %q", repeat, i, got[i].ProcessInstanceID, wantID)
+			}
+			if !reflect.DeepEqual(got[i], before[wantID]) {
+				t.Fatalf("iteration %d changed instance %q: got=%+v want=%+v", repeat, wantID, got[i], before[wantID])
+			}
+		}
+		m.mu.Lock()
+		unchanged := reflect.DeepEqual(m.processes, before)
+		m.mu.Unlock()
+		if !unchanged {
+			t.Fatalf("iteration %d modified Manager process state", repeat)
+		}
 	}
 }
 

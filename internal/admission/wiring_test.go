@@ -118,7 +118,7 @@ func TestInstallFromConfigRespectsEnabled(t *testing.T) {
 	sched := wiringScheduler(t)
 	planner := &wiringPlanSource{}
 	// Disabled: nothing is installed and no planner is consulted.
-	wiring, err := InstallFromConfig(sched, planner, config.AdmissionConfig{Enabled: false, OnInsufficient: "wait", OnUnknown: "allow", WaitTimeout: "5m", ReevaluationInterval: "2s", MaxSnapshotAge: "6s"})
+	wiring, err := InstallFromConfig(sched, nil, config.AdmissionConfig{Enabled: false, OnInsufficient: "wait", OnUnknown: "allow", WaitTimeout: "5m", ReevaluationInterval: "2s", MaxSnapshotAge: "6s"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"sync"
 	"syscall"
 	"time"
@@ -755,6 +756,9 @@ func (m *Manager) ProcessInstances() []corecontract.ProcessInstance {
 	for _, instance := range m.processes {
 		result = append(result, instance)
 	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].ProcessInstanceID < result[j].ProcessInstanceID
+	})
 	return result
 }
 
