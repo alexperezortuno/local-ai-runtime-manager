@@ -139,32 +139,7 @@ func main() {
 		if err := registry.MarkCleanShutdown(); err != nil {
 			log.Printf("persist inference recovery shutdown: %v", err)
 		}
-		return -1
 	}
-	return -1
-}
-
-func isReadOnlyCommand(command string) bool {
-	switch command {
-	case "models", "status", "queue", "capacity", "doctor":
-		return true
-	default:
-		return false
-	}
-}
-
-// installAdmission builds and installs the capacity admission evaluator when
-// the validated configuration enables it.
-//
-// With capacity.admission.enabled false it returns a nil wiring and installs
-// nothing: the Scheduler keeps its previous behavior, no admission worker is
-// started, no additional snapshot is taken and no HTTP response changes.
-func installAdmission(sched *scheduler.Scheduler, handler http.Handler, cfg config.Config) (*admission.Wiring, error) {
-	plannerProvider, ok := handler.(interface{ Planner() capacity.PlanSource })
-	if !ok {
-		return nil, errors.New("capacity admission requires a capacity planner")
-	}
-	return admission.InstallFromConfig(sched, plannerProvider.Planner(), cfg.Capacity.Admission)
 }
 
 // installAdmission builds and installs the capacity admission evaluator when
