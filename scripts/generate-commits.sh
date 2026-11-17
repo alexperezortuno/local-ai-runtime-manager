@@ -137,7 +137,7 @@ while IFS= read -r -d '' file; do
     )
 
     echo
-    echo "📄 $file"
+    echo "$file"
     echo "$response" | jq -r '.choices[0].message.content'
 
 done < <(git diff HEAD --name-only -z)

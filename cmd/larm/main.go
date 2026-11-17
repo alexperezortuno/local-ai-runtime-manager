@@ -139,6 +139,17 @@ func main() {
 		if err := registry.MarkCleanShutdown(); err != nil {
 			log.Printf("persist inference recovery shutdown: %v", err)
 		}
+		return -1
+	}
+	return -1
+}
+
+func isReadOnlyCommand(command string) bool {
+	switch command {
+	case "models", "status", "queue", "capacity", "doctor":
+		return true
+	default:
+		return false
 	}
 }
 
