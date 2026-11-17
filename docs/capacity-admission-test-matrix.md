@@ -5,11 +5,14 @@
 Esta matriz define pruebas de caracterización y gates para la política de
 admisión basada en memoria.
 
-**Estado actual (LARM-007.3.4b):** el enforcement está implementado y probado
-con fakes deterministas, y está conectado al Scheduler. **No** está habilitado
-en configuraciones operativas (`capacity.admission.enabled` sigue siendo
-`false` y el Scheduler no instala ningún evaluador por defecto) y la
-compatibilidad HTTP/OpenAI/SSE sigue pendiente de LARM-007.3.4c.
+**Estado actual (LARM-007.3.4c):** el enforcement está implementado y probado
+con fakes deterministas, está **conectado al Scheduler** y la **compatibilidad
+HTTP/OpenAI/SSE** está implementada: los contextos HTTP se propagan, el
+deadline efectivo es end-to-end y los errores tipados se mapean al contrato
+HTTP existente. **No** está habilitado en configuraciones operativas
+(`capacity.admission.enabled` sigue siendo `false` y el Scheduler no instala
+ningún evaluador por defecto). El enforcement operativo sigue requiriendo
+aprobación explícita.
 
 Estados usados abajo (el primero es la clasificación principal del caso):
 
@@ -17,7 +20,10 @@ Estados usados abajo (el primero es la clasificación principal del caso):
   afirmar enforcement.
 - **`PASS (fake)`:** el enforcement está implementado y probado con evaluadores
   falsos deterministas, dentro del Scheduler. No implica habilitación
-  operativa ni contrato HTTP.
+  operativa.
+- **`PASS (HTTP fake)`:** la capa HTTP/OpenAI/SSE está implementada y probada
+  con fakes deterministas y puertos efímeros. No implica habilitación
+  operativa ni validación en hardware real.
 - **Pendiente de enforcement:** debe permanecer `NOT IMPLEMENTED` hasta que se
   apruebe e implemente la política.
 - **Gate de regresión:** cuando exista la implementación, debe pasar además de
@@ -37,12 +43,14 @@ La columna **estado** separa lo que puede ser `PASS` en el checkout actual de
 lo que debe permanecer `NOT IMPLEMENTED`. Un resultado de fixture o de
 caracterización nunca convierte enforcement futuro en `PASS`.
 
-**Estado por entrega (LARM-007.3.4b):** el enforcement está implementado y
-probado con fakes, y está **conectado al Scheduler**. No está habilitado en
-configuraciones reales y la compatibilidad HTTP/SSE sigue pendiente
-(LARM-007.3.4c). Los casos marcados `PASS (fake)` se validaron con evaluadores
-falsos deterministas; los marcados `NOT IMPLEMENTED` dependen de la
-integración HTTP o de la habilitación operativa.
+**Estado por entrega (LARM-007.3.4c):** el enforcement está implementado y
+probado con fakes, está **conectado al Scheduler** y la **capa HTTP/OpenAI/SSE
+está implementada** (contextos propagados, deadline efectivo end-to-end,
+errores tipados mapeados al contrato HTTP existente). No está habilitado en
+configuraciones reales y la habilitación operativa sigue requiriendo
+aprobación explícita. Los casos marcados `PASS (fake)` se validaron con
+evaluadores falsos deterministas; los marcados `PASS (HTTP fake)` se validaron
+con fakes y puertos efímeros en la capa HTTP.
 
 | ID / estado | Precondiciones | Estímulo | Resultado esperado | Criterio de aceptación |
 |---|---|---|---|---|
@@ -54,7 +62,7 @@ integración HTTP o de la habilitación operativa.
 | **ADMISSION-06**<br>Ahora: `PASS (fake)` | Tres solicitudes A, B, C en FIFO; A tiene memoria insuficiente. | Evaluar A y dejarla en `WAITING_CAPACITY`. | B y C no adelantan A; A conserva lease `QUEUED`, no publica `PREPARING`, y reevalúa o termina. | `TestADMISSION06FIFOHeadBlocksLaterRequests`. Orden A→B→C, posición lógica estable y ningún trabajo posterior mientras A ocupa la cabeza. |
 | **ADMISSION-07**<br>Ahora: `PASS (fake)` | A espera por `INSUFFICIENT`; medición posterior pasa a `FIT`; lease sigue no terminal. | Publicar medición y reevaluar A. | A avanza una sola vez a comprobación final y luego a la activación normal. | `TestADMISSION07ReevaluationAllowsContinuation`. Nuevo `evaluation_id`/timestamp; no se usa `FIT` antiguo, no se duplica carga y no hay lock durante evaluación. |
 | **ADMISSION-08**<br>Ahora: `PASS (fake)` | A espera; nuevas mediciones siguen insuficientes. | Reevaluar hasta el límite. | A permanece sin `PREPARING`/`ACTIVE`; al vencer la lease `QUEUED` termina por la ruta existente como `CANCELLED` con causa de timeout. | `TestADMISSION08TimeoutEndsWait`. Espera finita, sin busy loop, heartbeat ficticio, proceso ni goroutines ilimitadas; FIFO consistente. |
-| **ADMISSION-09**<br>Ahora: `PASS (fake)` parcial | A espera con `wait_timeout`, `queue_wait_timeout` y deadline de contexto posibles. | Vencer `.a` admisión, `.b` proxy, `.c` contexto o `.d` simultáneamente. | Rige el primer deadline absoluto aplicable; devuelve timeout tipado y no extiende otro contrato. La lease se limpia por la ruta existente. | `TestADMISSION09EffectiveDeadlinePrecedence` (proxy) y `TestADMISSION09bCallerContextDeadlineWins` (contexto). El deadline del proxy **no está conectado** al handler: el proxy sigue usando su propio `queue_wait_timeout`. |
+| **ADMISSION-09**<br>Ahora: `PASS (fake)` + `PASS (HTTP fake)` | A espera con `wait_timeout`, `queue_wait_timeout` y deadline de contexto posibles. | Vencer `.a` admisión, `.b` proxy, `.c` contexto o `.d` simultáneamente. | Rige el primer deadline absoluto aplicable; devuelve timeout tipado y no extiende otro contrato. La lease se limpia por la ruta existente. | `TestADMISSION09EffectiveDeadlinePrecedence` (proxy) y `TestADMISSION09bCallerContextDeadlineWins` (contexto) en el Scheduler; `TestHTTP06/07/08` en la capa HTTP. **El deadline del proxy está conectado**: el proxy crea `context.WithTimeout(r.Context(), proxy.queue_wait_timeout)` y lo propaga a `RequestWithContext`, de modo que `D_effective = min(D_admission, D_proxy, D_context)`. |
 | **ADMISSION-10**<br>Ahora: `PASS (fake)` | A espera; cancelación de contexto/lease concurrente con una reevaluación `FIT`. | Cancelar y entregar `FIT` en la misma ventana. | Gana cancelación si se confirma antes del commit; no hay `Start` posterior. | `TestADMISSION10CancellationBeatsConcurrentFit`. Tie-break definido por commit serializado; operación idempotente, sin huérfanos ni proceso. |
 | **ADMISSION-11**<br>Ahora: gate | Lease `ACTIVE` con TTL corto; otra solicitud espera capacidad. | Dejar expirar la lease activa durante la espera. | La lease expirada no es permiso; la siguiente solicitud sigue residencia/cola normales. | `TestAdmissionWaitDoesNotStartOrExtend`. No se renueva lease por esperar, no hay heartbeat `QUEUED` y no se reactiva una terminal. |
 | **ADMISSION-12**<br>Ahora: caracterización + gate | Lease externa `QUEUED` o `PREPARING`; heartbeat solo aplica a `ACTIVE`. | Enviar heartbeat antes de `ACTIVE` y después de expirar. | Se conserva conflicto/expiración actual; evaluación no cambia estados. | No se mantiene una lease `ACTIVE` artificial durante espera. |
@@ -68,8 +76,8 @@ integración HTTP o de la habilitación operativa.
 | **ADMISSION-20**<br>Ahora: caracterización | `capacity.shadow_mode=true`, Planner fixture y Scheduler normal. | Crear solicitudes `NEW_LOAD`, `RESIDENT_REUSE` y `QUEUED`. | Shadow registra resultados async; ninguna decisión operativa cambia. | Historial incluye operación/veredicto/fuente/justificación; Shadow Mode no se modificó. |
 | **ADMISSION-21**<br>Ahora: caracterización + gate | `capacity.shadow_mode=false`, misma configuración y solicitudes. | Repetir ADMISSION-20. | No se instala observer Shadow; FIFO/leases/lifecycle no cambian. | Diferencia solo observacional; sin endpoint ni mutación adicional. |
 | **ADMISSION-22**<br>Ahora: `PASS (fake)` | Configuración actual sin `admission.enabled` (equivalente al futuro `false`). | Secuencias nuevas, resident reuse, cancelación, expiry y Recovery existentes. | Resultados idénticos al baseline. | `TestADMISSION22DisabledAdmissionKeepsCurrentBehavior` más la suite completa del Scheduler y de la API. |
-| **ADMISSION-23**<br>Ahora: gate de regresión; enforcement HTTP `NOT IMPLEMENTED` | Cliente OpenAI compatible con/sin `X-LARM-Lease-ID`; HTTP y SSE. | `.a` chat/embeddings no streaming; `.b` chat streaming SSE; `.c` timeout/cancelación en cola y durante SSE. | Se conservan leases, HTTP, headers, JSON de error y reglas SSE actuales cuando admission está deshabilitado. | Sin headers/endpoints nuevos; espera usa timeout actual; tras headers/primer evento no se reescribe status. Enforcement HTTP/SSE: `NOT IMPLEMENTED` (LARM-007.3.4c). |
-| **ADMISSION-24**<br>Ahora: validación de plataforma; enforcement `NOT IMPLEMENTED` | Fixture Linux con RAM y `nvidia-smi` sintéticos: VRAM suficiente/insuficiente, `PARTIAL` y proveedor ausente. | `.a` evaluar `gpu_layers` y verificar dominios; `.b` intentar política de espera/bloqueo. | `.a` separa RAM/VRAM y clasifica según evidencia; `.b` no bloquea ni espera en este checkout. | No GPU real; no se inventa VRAM; `PARTIAL` sin todos los dominios requeridos es `UNKNOWN`; `.a` es `PASS`, `.b` es `NOT IMPLEMENTED` (fixture NVIDIA no disponible en este checkout). |
+| **ADMISSION-23**<br>Ahora: `PASS (HTTP fake)` | Cliente OpenAI compatible con/sin `X-LARM-Lease-ID`; HTTP y SSE. | `.a` chat/embeddings no streaming; `.b` chat streaming SSE; `.c` timeout/cancelación en cola y durante SSE. | Se conservan leases, HTTP, headers, JSON de error y reglas SSE actuales cuando admission está deshabilitado. | Sin headers/endpoints nuevos; espera usa timeout actual; tras headers/primer evento no se reescribe status. Con admission habilitado: `TestHTTP-01..20` en `internal/api/admission_http_test.go` cubren baseline, `FIT`, `INSUFFICIENT`, timeout tipado, cancelación, precedencia de deadlines, replay idempotente, error antes/después de SSE y las tres variantes de `X-LARM-Lease-ID`. |
+| **ADMISSION-24**<br>Ahora: validación de plataforma; enforcement `.b` `PASS (fake)` | Fixture Linux con RAM y `nvidia-smi` sintéticos: VRAM suficiente/insuficiente, `PARTIAL` y proveedor ausente. | `.a` evaluar `gpu_layers` y verificar dominios; `.b` intentar política de espera/bloqueo. | `.a` separa RAM/VRAM y clasifica según evidencia; `.b` bloquea y espera acotadamente cuando la capacidad es insuficiente. | No GPU real; no se inventa VRAM; `PARTIAL` sin todos los dominios requeridos es `UNKNOWN`; `.a` es `PASS`; `.b` es `PASS (fake)` con evaluador falso (`TestADMISSION02`, `TestHTTP-03`, `TestHTTP-04`). El fixture NVIDIA no está disponible en este checkout. |
 | **ADMISSION-25**<br>Ahora: validación de plataforma; enforcement `PASS (fake)` | macOS arm64 con memoria unificada; sin proveedor NVIDIA. | `.a` evaluar nueva carga, `RESIDENT_REUSE`, stale/unavailable; `.b` intentar enforcement. | `.a` usa un presupuesto unificado; ausencia de GPU dedicada no causa `UNKNOWN` por sí sola; stale/unavailable sí. `.b` el enforcement con fakes no habilita la política. | `TestAdmissionResidentReuseUsesLiveIdentity` y la suite de `internal/capacity`. Sin modelo real/NVIDIA. |
 
 ## 3. Fixtures y aislamiento
@@ -105,13 +113,14 @@ sea tratado como VRAM cero. No requiere privilegios ni ejecución de
 
 ## 4. Evidencia y comandos
 
-LARM-007.3.4b agrega pruebas de enforcement al árbol de código. La validación
-se ejecuta sin hardware especial:
+LARM-007.3.4c agrega pruebas de enforcement y de compatibilidad HTTP al árbol
+de código. La validación se ejecuta sin hardware especial:
 
 ```bash
 go test ./... -count=1
 go test -race ./... -count=1
 go vet ./...
+gofmt -l .
 git diff --check
 ```
 
@@ -120,6 +129,12 @@ Pruebas de enforcement (fakes deterministas, sin modelo real, sin NVIDIA):
 - `internal/scheduler/admission_enforce_test.go`
 - `internal/admission/adapter_test.go`
 
+Pruebas de compatibilidad HTTP/OpenAI/SSE (fakes deterministas, puertos
+efímeros, sin modelo real):
+
+- `internal/api/admission_http_test.go` (HTTP-01–20 y mapeo de errores)
+- `internal/admission/wiring_test.go` (wiring, no duplicación, shutdown)
+
 La evidencia separa:
 
 1. `PASS` de contratos actuales (FIFO, leases, Recovery, Shadow, Planner y API
@@ -127,16 +142,28 @@ La evidencia separa:
 2. `PASS (fake)` del enforcement implementado y conectado al Scheduler
    (ADMISSION-02, 04, 06–10, 13–17, 19, 22 y las subcobservaciones de
    plataforma de ADMISSION-25).
-3. `NOT IMPLEMENTED` de lo que depende de la integración HTTP/OpenAI/SSE
-   (ADMISSION-23 y la parte `.b` de ADMISSION-24) y de la habilitación
-   operativa.
+3. `PASS (HTTP fake)` de la compatibilidad HTTP/OpenAI/SSE (ADMISSION-23 y la
+   parte `.b` de ADMISSION-24), probada con fakes y puertos efímeros.
 4. `FAIL`/`UNKNOWN` del Planner como datos esperados, no como fallos de
    infraestructura.
 
-No se marca como `PASS` la parte de enforcement de ADMISSION-23 ni 24.b: esos
-casos dependen de la integración HTTP pendiente. La habilitación operativa de
-`capacity.admission.enabled` sigue requiriendo aprobación explícita y no está
-cubierta por ningún `PASS` de esta matriz.
+La habilitación operativa de `capacity.admission.enabled` sigue requiriendo
+aprobación explícita y no está cubierta por ningún `PASS` de esta matriz: los
+casos HTTP prueban la capa con admission habilitada **en pruebas**, nunca en
+una configuración real.
+
+### 4.1 Fallo preexistente ajeno a esta entrega
+
+`internal/admincli` → `TestDoctorIsReadOnlyAndClassifiesStoppedServiceAsWarning`
+falla con `PORT_8090 FAIL: configured API port is occupied`. En la máquina de
+validación hay un proceso `larm` real escuchando en `127.0.0.1:8090`. El fallo
+se reprodujo sobre el árbol **sin modificar** (`git stash`), por lo que es
+ambiental y no una regresión de esta entrega. El test no fue modificado.
+
+Los dos flakes preexistentes citados en la entrega 007.3.4b se vuelven a
+comprobar en aislamiento: `TestManualStopDrainsResidentBeforeQueuedLease`
+(`internal/scheduler`) y `TestPositiveRecoveryValidation` (`internal/recovery`)
+pasan con `-count=3`.
 
 ## 5. Gates de no regresión
 

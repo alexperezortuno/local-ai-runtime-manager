@@ -891,3 +891,58 @@ func TestAdmissionNeverBypassesTheHead(t *testing.T) {
 		t.Fatalf("queue = %v", queue)
 	}
 }
+
+// The HTTP caller context is not retained after the acquisition terminates.
+func TestAdmissionCallerContextIsReleasedAfterTermination(t *testing.T) {
+	_, s := testScheduler(t, "normal", 1, time.Second, time.Second, 2, time.Second, 100*time.Millisecond)
+	evaluator := newAdmissionScriptedEvaluator(AdmissionFit)
+	enableAdmission(t, s, evaluator, AdmissionOptions{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	lease, err := s.RequestWithContext(ctx, "request-1", "model-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitLease(t, s, lease.ID, Active)
+	s.mu.Lock()
+	_, retained := s.admissionContexts[lease.ID]
+	s.mu.Unlock()
+	if retained {
+		t.Fatal("the caller context survived the acquisition")
+	}
+}
+
+// A terminal admission failure is exposed with its typed kind.
+func TestAdmissionFailureIsTyped(t *testing.T) {
+	_, s := testScheduler(t, "normal", 1, time.Second, time.Second, 2, time.Second, 100*time.Millisecond)
+	evaluator := newAdmissionScriptedEvaluator(AdmissionInsufficient)
+	enableAdmission(t, s, evaluator, AdmissionOptions{OnInsufficient: "reject", WaitTimeout: time.Hour, ReevaluationInterval: 10 * time.Millisecond})
+	lease, err := s.RequestWithRequestID("request-1", "model-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitLease(t, s, lease.ID, Cancelled)
+	failure := s.AdmissionFailure(lease.ID)
+	if failure == nil {
+		t.Fatal("the terminal admission failure was not typed")
+	}
+	if failure.Kind != AdmissionErrorCapacity {
+		t.Fatalf("kind = %s, want capacity", failure.Kind)
+	}
+	if !errors.Is(failure, ErrAdmissionCapacity) {
+		t.Fatal("the typed failure does not match ErrAdmissionCapacity")
+	}
+	if errors.Is(failure, ErrAdmissionUnavailable) {
+		t.Fatal("the capacity failure was confused with an unavailable evaluation")
+	}
+}
+
+// A lease that failed for a non-admission reason has no typed failure.
+func TestAdmissionFailureIsAbsentForOtherCauses(t *testing.T) {
+	if failure := AdmissionFailure("runtime process exited unexpectedly"); failure != nil {
+		t.Fatalf("failure = %+v, want none", failure)
+	}
+	if failure := AdmissionFailure(""); failure != nil {
+		t.Fatalf("failure = %+v, want none", failure)
+	}
+}

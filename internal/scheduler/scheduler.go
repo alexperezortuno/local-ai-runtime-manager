@@ -271,6 +271,22 @@ func (s *Scheduler) Get(id string) (LeaseStatus, error) {
 	return result, nil
 }
 
+// AdmissionFailure returns the typed admission error of a lease that was
+// terminated by the admission policy. It returns nil when the lease did not
+// fail for an admission reason.
+//
+// The HTTP layer uses it to map a terminal admission decision to the existing
+// HTTP contract without parsing free-form text.
+func (s *Scheduler) AdmissionFailure(id string) *AdmissionError {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	l, ok := s.leases[id]
+	if !ok {
+		return nil
+	}
+	return AdmissionFailure(l.Error)
+}
+
 // RequestWithContext is the context-propagating acquisition adapter. It keeps
 // the existing public signatures untouched while letting a caller contribute
 // its context and its absolute deadline to the effective admission deadline.
@@ -370,10 +386,15 @@ func (s *Scheduler) SetAdmissionObserver(observer AdmissionObserver) {
 // SetAdmissionEvaluator installs the optional capacity admission dependency.
 // It is intentionally separate from AdmissionObserver: this evaluator is an
 // enforcement boundary, while the observer remains non-authoritative.
-func (s *Scheduler) SetAdmissionEvaluator(evaluator AdmissionEvaluator) {
+//
+// It returns the previously installed evaluator, if any, so the caller can
+// release its resources and never leave two evaluators active.
+func (s *Scheduler) SetAdmissionEvaluator(evaluator AdmissionEvaluator) AdmissionEvaluator {
 	s.mu.Lock()
+	defer s.mu.Unlock()
+	previous := s.admissionEvaluator
 	s.admissionEvaluator = evaluator
-	s.mu.Unlock()
+	return previous
 }
 
 // SetAdmissionOptions installs the Scheduler-owned admission policy. The
@@ -456,6 +477,13 @@ func (s *Scheduler) WaitActive(ctx context.Context, id string) error {
 			return nil
 		}
 		if l.State == Failed || l.State == Cancelled || l.State == Expired || l.State == Completed {
+			// A lease terminated by the admission policy keeps its typed
+			// cause, so the caller can map it to the existing HTTP contract
+			// instead of a generic conflict.
+			if admissionErr := AdmissionFailure(l.Error); admissionErr != nil {
+				s.mu.Unlock()
+				return admissionErr
+			}
 			s.mu.Unlock()
 			return ErrConflict
 		}

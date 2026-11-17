@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"local-ai-runtime/internal/capacity"
+	"local-ai-runtime/internal/config"
 	"local-ai-runtime/internal/scheduler"
 )
 
@@ -94,6 +95,19 @@ func verdictFor(verdict capacity.Verdict) scheduler.AdmissionVerdict {
 	}
 }
 
+// Close releases the capacity evaluator behind this adapter. It is safe to
+// call more than once. After Close the adapter reports the evaluation as
+// unavailable, never as a FIT.
+func (e *Evaluator) Close() error {
+	if e == nil || e.evaluator == nil {
+		return nil
+	}
+	if closer, ok := e.evaluator.(interface{ Close() }); ok {
+		closer.Close()
+	}
+	return nil
+}
+
 // ContextProvider serves the caller context and deadline for an acquisition.
 //
 // It exists so the Scheduler can compute the effective admission deadline
@@ -153,3 +167,91 @@ var _ scheduler.AdmissionContextProvider = (*ContextProvider)(nil)
 
 // ErrUnavailable is returned when no capacity evaluation could be obtained.
 var ErrUnavailable = errors.New("admission evaluation unavailable")
+
+// Wiring is the installed admission dependency set. It owns the resources
+// that must be closed during shutdown.
+type Wiring struct {
+	evaluator *capacity.Evaluator
+	adapter   *Evaluator
+	provider  *ContextProvider
+}
+
+// Install builds the capacity admission evaluator and installs it into the
+// Scheduler.
+//
+// It is the only place where the operational evaluator is constructed. When
+// admission is disabled it installs nothing: the Scheduler keeps its previous
+// behavior, no worker is started and no additional snapshot is taken.
+//
+// The evaluator is read-only: it never starts a model and never mutates the
+// Scheduler. The returned Wiring must be closed during shutdown.
+func Install(sched *scheduler.Scheduler, planner capacity.PlanSource, options scheduler.AdmissionOptions, evaluatorOptions capacity.EvaluatorOptions) (*Wiring, error) {
+	if sched == nil {
+		return nil, errors.New("admission wiring requires a scheduler")
+	}
+	if planner == nil {
+		return nil, errors.New("admission wiring requires a capacity planner")
+	}
+	normalized, err := options.Normalize()
+	if err != nil {
+		return nil, err
+	}
+	evaluator, err := capacity.NewAdmissionEvaluator(planner, evaluatorOptions)
+	if err != nil {
+		return nil, err
+	}
+	adapter := New(evaluator)
+	provider := NewContextProvider()
+	// The options and the evaluator are installed before the Scheduler can
+	// accept a request, so no acquisition is ever evaluated without a policy.
+	if err := sched.SetAdmissionOptions(normalized); err != nil {
+		evaluator.Close()
+		return nil, err
+	}
+	sched.SetAdmissionContextProvider(provider)
+	// A previous evaluator is released: the Scheduler never runs two
+	// evaluators, and no worker is duplicated.
+	if previous := sched.SetAdmissionEvaluator(adapter); previous != nil {
+		if closer, ok := previous.(interface{ Close() error }); ok {
+			_ = closer.Close()
+		}
+	}
+	return &Wiring{evaluator: evaluator, adapter: adapter, provider: provider}, nil
+}
+
+// InstallFromConfig builds and installs the capacity admission evaluator when
+// the validated configuration enables it.
+//
+// With capacity.admission.enabled false it returns a nil wiring and installs
+// nothing: the Scheduler keeps its previous behavior, no admission worker is
+// started, no additional snapshot is taken and no HTTP response changes.
+func InstallFromConfig(sched *scheduler.Scheduler, planner capacity.PlanSource, admission config.AdmissionConfig) (*Wiring, error) {
+	if !admission.Enabled {
+		return nil, nil
+	}
+	options := scheduler.AdmissionOptions{
+		OnInsufficient:       admission.OnInsufficient,
+		OnUnknown:            admission.OnUnknown,
+		WaitTimeout:          admission.WaitDuration(),
+		ReevaluationInterval: admission.ReevaluationDuration(),
+	}
+	// The proxy deadline is not a global option: the proxy contributes its own
+	// queue_wait_timeout through the request context, so an administrative
+	// acquisition without a waiting context is bounded by the admission
+	// timeout alone, as the contract requires.
+	evaluatorOptions := capacity.EvaluatorOptions{
+		MaxSnapshotAge: admission.SnapshotAgeDuration(),
+	}
+	return Install(sched, planner, options, evaluatorOptions)
+}
+
+// Close releases the admission workers. It is safe to call more than once.
+func (w *Wiring) Close() error {
+	if w == nil {
+		return nil
+	}
+	if w.evaluator != nil {
+		w.evaluator.Close()
+	}
+	return nil
+}

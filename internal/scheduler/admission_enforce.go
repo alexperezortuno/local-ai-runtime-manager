@@ -279,7 +279,10 @@ func (s *Scheduler) failAdmissionHeadLocked(head AdmissionRequest, admissionErr 
 	}
 	proposed := cloneLease(*lease)
 	proposed.State = Cancelled
-	proposed.Error = admissionErr.Error()
+	proposed.Error = admissionFailurePrefix + string(admissionErr.Kind)
+	if admissionErr.Cause != nil && !errors.Is(admissionErr.Cause, ErrAdmissionCapacity) && !errors.Is(admissionErr.Cause, ErrAdmissionUnavailable) && !errors.Is(admissionErr.Cause, ErrAdmissionRecovery) {
+		proposed.Error = admissionFailurePrefix + string(admissionErr.Kind) + ": " + admissionErr.Cause.Error()
+	}
 	if err := s.persistLeaseChangeLocked(head.LeaseID, proposed); err != nil {
 		s.recoveryBlocked = true
 		log.Printf("persist admission cancellation: %v", err)

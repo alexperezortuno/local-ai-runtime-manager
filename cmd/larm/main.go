@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"log"
 	"net"
@@ -17,6 +18,7 @@ import (
 
 	"local-ai-runtime/internal/adminauth"
 	"local-ai-runtime/internal/admincli"
+	"local-ai-runtime/internal/admission"
 	"local-ai-runtime/internal/api"
 	"local-ai-runtime/internal/capacity"
 	"local-ai-runtime/internal/config"
@@ -66,6 +68,17 @@ func main() {
 		log.Fatalf("open inference recovery state: %v", err)
 	}
 	defer func() { _ = handler.(interface{ Close() error }).Close() }()
+	// The capacity admission evaluator is installed only when the validated
+	// configuration enables it. With the default capacity.admission.enabled
+	// false no evaluator is installed, no admission worker is started and the
+	// Scheduler keeps its previous behavior byte for byte.
+	admissionWiring, err := installAdmission(sched, handler, cfg)
+	if err != nil {
+		log.Fatalf("install capacity admission: %v", err)
+	}
+	if admissionWiring != nil {
+		defer admissionWiring.Close()
+	}
 	// Recovery and the Scheduler admission gate are installed by the handler
 	// construction before any configured residency load is admitted.
 	if err := sched.Preload(); err != nil {
@@ -127,6 +140,20 @@ func main() {
 			log.Printf("persist inference recovery shutdown: %v", err)
 		}
 	}
+}
+
+// installAdmission builds and installs the capacity admission evaluator when
+// the validated configuration enables it.
+//
+// With capacity.admission.enabled false it returns a nil wiring and installs
+// nothing: the Scheduler keeps its previous behavior, no admission worker is
+// started, no additional snapshot is taken and no HTTP response changes.
+func installAdmission(sched *scheduler.Scheduler, handler http.Handler, cfg config.Config) (*admission.Wiring, error) {
+	plannerProvider, ok := handler.(interface{ Planner() capacity.PlanSource })
+	if !ok {
+		return nil, errors.New("capacity admission requires a capacity planner")
+	}
+	return admission.InstallFromConfig(sched, plannerProvider.Planner(), cfg.Capacity.Admission)
 }
 
 func readOnlyCommandIndex(args []string) int {

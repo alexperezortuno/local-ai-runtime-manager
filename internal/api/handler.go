@@ -118,6 +118,16 @@ func (h *Handler) Close() error {
 	return nil
 }
 
+// Planner returns the read-only capacity planner of this handler. It is the
+// same planner the capacity endpoints use, so an admission wiring never
+// creates a second planner or a second snapshot source.
+func (h *Handler) Planner() capacity.PlanSource {
+	if h == nil || h.planner == nil {
+		return nil
+	}
+	return h.planner
+}
+
 func (h *Handler) publicMutationRejected(w http.ResponseWriter, _ *http.Request) {
 	writeError(w, http.StatusConflict, "administrative model operations require the protected Unix socket")
 }
@@ -339,7 +349,7 @@ func (h *Handler) createLease(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "Idempotency-Key must contain one canonical UUID")
 			return
 		}
-		status, replay, err := h.scheduler.RequestIdempotent(keys[0], request.Model)
+		status, replay, err := h.scheduler.RequestIdempotentWithContext(r.Context(), keys[0], request.Model)
 		if err != nil {
 			switch {
 			case errors.Is(err, scheduler.ErrInvalidIdempotencyKey):
@@ -366,7 +376,7 @@ func (h *Handler) createLease(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusAccepted, status)
 		return
 	}
-	lease, err := h.scheduler.Request(request.Model)
+	lease, err := h.scheduler.RequestWithContext(r.Context(), "", request.Model)
 	if err != nil {
 		writeSchedulerError(w, err)
 		return
@@ -412,6 +422,19 @@ func writeSchedulerError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, scheduler.ErrQueueFull):
 		writeError(w, http.StatusTooManyRequests, err.Error())
+	case errors.Is(err, scheduler.ErrAdmissionCapacity):
+		// The preventive capacity decision reuses the existing Scheduler
+		// conflict branch, exactly like scheduler.ErrCapacity.
+		writeError(w, http.StatusConflict, admissionSafeMessage(err))
+	case errors.Is(err, scheduler.ErrAdmissionTimeout):
+		// The admission wait timed out: the existing terminal lease body.
+		writeError(w, http.StatusConflict, admissionSafeMessage(err))
+	case errors.Is(err, scheduler.ErrAdmissionUnavailable):
+		writeError(w, http.StatusServiceUnavailable, admissionSafeMessage(err))
+	case errors.Is(err, scheduler.ErrAdmissionCancelled):
+		writeError(w, http.StatusServiceUnavailable, admissionSafeMessage(err))
+	case errors.Is(err, scheduler.ErrAdmissionRecovery):
+		writeRecoveryError(w, err)
 	case errors.Is(err, scheduler.ErrConflict), errors.Is(err, scheduler.ErrExpired), errors.Is(err, scheduler.ErrInferenceProtected), errors.Is(err, scheduler.ErrAlreadyStopped), errors.Is(err, scheduler.ErrCapacity):
 		writeError(w, http.StatusConflict, err.Error())
 	case errors.Is(err, scheduler.ErrClosed), errors.Is(err, runtime.ErrUnavailable):
