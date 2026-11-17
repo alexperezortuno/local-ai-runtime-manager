@@ -3,6 +3,8 @@ package scheduler
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 )
 
@@ -162,6 +164,44 @@ type AdmissionError struct {
 	EvaluationID string
 	Cause        error
 	Retryable    bool
+}
+
+// admissionFailurePrefix marks a persisted lease error as a typed admission
+// failure. The HTTP layer maps it back to a typed error without parsing the
+// human-readable message.
+const admissionFailurePrefix = "admission: "
+
+// AdmissionFailure reconstructs the typed admission error of a lease that
+// failed admission. It returns nil when the lease did not fail for an
+// admission reason.
+//
+// The persisted lease error carries the admission kind, so the HTTP layer can
+// map a terminal admission decision without parsing free-form text.
+func AdmissionFailure(err string) *AdmissionError {
+	if !strings.HasPrefix(err, admissionFailurePrefix) {
+		return nil
+	}
+	rest := strings.TrimPrefix(err, admissionFailurePrefix)
+	kind, cause, _ := strings.Cut(rest, ": ")
+	admissionErr := &AdmissionError{Kind: AdmissionErrorKind(strings.TrimSpace(kind))}
+	switch admissionErr.Kind {
+	case AdmissionErrorCapacity:
+		admissionErr.Cause = ErrAdmissionCapacity
+	case AdmissionErrorTimeout:
+		admissionErr.Cause = ErrAdmissionTimeout
+	case AdmissionErrorUnavailable:
+		admissionErr.Cause = ErrAdmissionUnavailable
+	case AdmissionErrorCancelled:
+		admissionErr.Cause = ErrAdmissionCancelled
+	case AdmissionErrorRecovery:
+		admissionErr.Cause = ErrAdmissionRecovery
+	default:
+		return nil
+	}
+	if cause != "" {
+		admissionErr.Cause = fmt.Errorf("%w: %s", admissionErr.Cause, cause)
+	}
+	return admissionErr
 }
 
 func (e *AdmissionError) Error() string {
