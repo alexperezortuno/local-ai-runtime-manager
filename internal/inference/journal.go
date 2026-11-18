@@ -121,8 +121,9 @@ func (j *Journal) Records() []Snapshot {
 	return cloneSnapshots(j.records)
 }
 
-// ProcessInstances returns durable process metadata. It is diagnostic data;
-// opening a journal never adopts or signals any process.
+// ProcessInstances returns durable process metadata in deterministic
+// ProcessInstanceID order. It is diagnostic data; opening a journal never
+// adopts or signals any process.
 func (j *Journal) ProcessInstances() []corecontract.ProcessInstance {
 	j.mu.Lock()
 	defer j.mu.Unlock()
@@ -314,5 +315,6 @@ func cloneProcesses(in []corecontract.ProcessInstance) []corecontract.ProcessIns
 		out[i].Evidence = append([]corecontract.TerminalEvidence(nil), in[i].Evidence...)
 		out[i].TerminationSignals = append([]string(nil), in[i].TerminationSignals...)
 	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].ProcessInstanceID < out[j].ProcessInstanceID })
 	return out
 }

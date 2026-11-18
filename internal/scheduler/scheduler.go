@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"local-ai-runtime/internal/admission/observe"
 	"local-ai-runtime/internal/config"
 	runtime "local-ai-runtime/internal/runtime"
 )
@@ -85,6 +86,9 @@ type Scheduler struct {
 	admissionDeadline         map[string]time.Time
 	admissionContexts         map[string]context.Context
 	admissionContextDeadlines map[string]time.Time
+	// admissionRecorder observes admission enforcement decisions. It never
+	// participates in them: it only receives copies of decisions already made.
+	admissionRecorder *observe.Recorder
 	// idempotencyFault is a package-local test seam. Production never sets it;
 	// it lets persistence tests fail at an explicit durable-store boundary.
 	idempotencyFault func(string) error
@@ -417,6 +421,25 @@ func (s *Scheduler) SetAdmissionContextProvider(provider AdmissionContextProvide
 	s.mu.Lock()
 	s.admissionContext = provider
 	s.mu.Unlock()
+}
+
+// SetAdmissionRecorder installs the optional admission observability recorder.
+//
+// The recorder is strictly non-authoritative: it receives copies of decisions
+// that were already made and never influences them. Passing nil disables the
+// instrumentation and restores the pre-instrumentation behavior exactly.
+func (s *Scheduler) SetAdmissionRecorder(recorder *observe.Recorder) {
+	s.mu.Lock()
+	s.admissionRecorder = recorder
+	s.mu.Unlock()
+}
+
+// AdmissionRecorder returns the installed admission observability recorder,
+// or nil when the instrumentation is disabled.
+func (s *Scheduler) AdmissionRecorder() *observe.Recorder {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.admissionRecorder
 }
 
 func (s *Scheduler) trackAdmissionRequestLocked(leaseID, requestID string) {

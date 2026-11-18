@@ -271,11 +271,38 @@ func TestManualStopDrainsResidentBeforeQueuedLease(t *testing.T) {
 	if err := s.ManualStart(context.Background(), "model-1"); err != nil {
 		t.Fatal(err)
 	}
+	resident, ready := s.manager.CurrentProcessForModel("model-1")
+	if !ready {
+		t.Fatal("the administrative start did not leave a resident process")
+	}
 	lease, _ := s.Request("model-1")
-	if err := s.ManualStop(context.Background(), "model-1"); err != nil {
+	// ManualStop and the queued acquisition race for the same resident
+	// process. Both outcomes are legitimate and the assertion below covers
+	// each of them:
+	//
+	//   - nil: the administrative stop reached the worker first, so the
+	//     resident was drained and the queued lease had to load a new
+	//     process.
+	//   - ErrConflict: the queued acquisition won the resident before the
+	//     administrative stop reached the worker.
+	//
+	// Any other error is a real failure.
+	err := s.ManualStop(context.Background(), "model-1")
+	if err != nil && !errors.Is(err, ErrConflict) {
 		t.Fatal(err)
 	}
 	waitLease(t, s, lease.ID, Active)
+	if err == nil {
+		// The stop drained the resident: the queued lease must not be
+		// running on the process the administrative stop tore down.
+		current, residentReady := s.manager.CurrentProcessForModel("model-1")
+		if !residentReady {
+			t.Fatal("the queued lease is active but no process is resident")
+		}
+		if current.ProcessInstanceID == resident.ProcessInstanceID {
+			t.Fatalf("the queued lease reused the drained resident %s", resident.ProcessInstanceID)
+		}
+	}
 	if _, err := s.Release(lease.ID); err != nil {
 		t.Fatal(err)
 	}

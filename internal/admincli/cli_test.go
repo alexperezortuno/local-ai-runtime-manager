@@ -41,6 +41,10 @@ func TestReadOnlyAdministrativeCommands(t *testing.T) {
 			_, _ = io.WriteString(w, `{"verdict":"FIT","model_id":"model-1","justification":["fixture"]}`)
 		case "/api/v1/capacity/evaluations":
 			_, _ = io.WriteString(w, `[{"model_id":"model-1","operation":"NEW_LOAD","verdict":"FIT","observation_state":"EVALUATED"}]`)
+		case "/api/v1/admission/metrics":
+			_, _ = io.WriteString(w, `{"evaluations":{"FIT":1},"admitted":1,"unknown_allowed":1}`)
+		case "/api/v1/admission/events":
+			_, _ = io.WriteString(w, `[{"type":"admission.continuation","verdict":"UNKNOWN","policy_authorized":true}]`)
 		case "/api/v1/recovery/incidents":
 			_, _ = io.WriteString(w, `[{"incident_id":"incident-1","status":"BLOCKED"}]`)
 		case "/api/v1/recovery/incidents/incident-1":
@@ -66,6 +70,8 @@ func TestReadOnlyAdministrativeCommands(t *testing.T) {
 		{"processes", []string{"-url", server.URL, "processes"}, `"process_instance_id": "process-1"`},
 		{"capacity", []string{"-url", server.URL, "capacity", "model-1"}, `"verdict": "FIT"`},
 		{"capacity evaluations", []string{"-url", server.URL, "capacity-evaluations"}, `"operation": "NEW_LOAD"`},
+		{"admission metrics", []string{"-url", server.URL, "admission-metrics"}, `"unknown_allowed": 1`},
+		{"admission events", []string{"-url", server.URL, "admission-events"}, `"policy_authorized": true`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -255,13 +261,32 @@ func TestDoctorIsReadOnlyAndClassifiesStoppedServiceAsWarning(t *testing.T) {
 	if err := os.WriteFile(model, []byte("fixture"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	backendListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	backendPort := backendListener.Addr().(*net.TCPAddr).Port
+	if err := backendListener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	apiListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	apiPort := apiListener.Addr().(*net.TCPAddr).Port
+	if err := apiListener.Close(); err != nil {
+		t.Fatal(err)
+	}
 	configPath := filepath.Join(dir, "models.yaml")
-	config := `runtime:
+	config := `server:
+  host: "127.0.0.1"
+  port: ` + strconv.Itoa(apiPort) + `
+runtime:
   binary: "` + os.Args[0] + `"
 models:
   model:
     path: "` + model + `"
-    port: 39101
+    port: ` + strconv.Itoa(backendPort) + `
     context: 1024
     batch: 128
     ubatch: 32

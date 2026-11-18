@@ -5,6 +5,8 @@ import (
 	"errors"
 	"log"
 	"time"
+
+	"local-ai-runtime/internal/admission/observe"
 )
 
 // admissionOutcome is the internal result of one admission attempt.
@@ -60,10 +62,23 @@ func (s *Scheduler) admitHeadLocked() (string, admissionOutcome) {
 	if !hasCaller {
 		callerCtx = nil
 	}
-	s.admissionWait = &admissionWait{phase: admissionPhaseEvaluating, leaseID: head.LeaseID, generation: head.Generation, deadline: deadline}
+	// previousWait is the wait this evaluation continues. A nil previous wait
+	// means this is the first evaluation of the head; a wait for the same
+	// lease and generation means this evaluation is a reevaluation.
+	var previousWait *admissionWait
+	if wait := s.admissionWait; wait != nil && wait.phase == admissionPhaseWaiting && wait.leaseID == head.LeaseID && wait.generation == head.Generation {
+		previousWait = wait
+	}
+	// The evaluating wait carries the same correlation identifiers and the
+	// same wait start as the waiting wait, so a cancellation that arrives
+	// while the evaluation runs is observable with the same identifiers.
+	s.admissionWait = &admissionWait{phase: admissionPhaseEvaluating, leaseID: head.LeaseID, generation: head.Generation, deadline: deadline, requestID: head.RequestID, modelID: head.ModelID, waitingSince: previousWaitWaitingSince(previousWait)}
+	recorder := s.admissionRecorder
 	s.mu.Unlock()
 
+	started := time.Now()
 	evidence, err := s.evaluateAdmission(evaluator, provider, callerCtx, request, deadline)
+	evaluationDuration := time.Since(started)
 
 	s.mu.Lock()
 	// The head may have changed while the evaluation ran. A late result must
@@ -86,27 +101,48 @@ func (s *Scheduler) admitHeadLocked() (string, admissionOutcome) {
 		// An evaluator failure is UNKNOWN evidence, not a preventive decision.
 		log.Printf("admission evaluation for lease %s failed: %v", request.LeaseID, err)
 	}
+	// A failed evaluation is recorded separately from the verdict it
+	// produced: the failure is a cause, never a decision.
+	if err != nil {
+		s.observeEvaluationErrorLocked(recorder, request, evidence, err, evaluationDuration)
+	}
+	// policyAction records how the continuation was authorized. For an
+	// UNKNOWN verdict it is the policy, never a FIT.
+	policyAction := ""
+	outcome := observe.OutcomeAdmitted
 	switch evidence.Verdict {
 	case AdmissionFit:
 		// Continue to the final check.
+		policyAction = "ALLOW_FIT"
 	case AdmissionInsufficient:
 		if options.OnInsufficient == "reject" {
+			outcome = observe.OutcomeRejected
+			s.observeEvaluationLocked(recorder, request, evidence, evaluationDuration, outcome)
 			s.failAdmissionHeadLocked(head, &AdmissionError{Kind: AdmissionErrorCapacity, RequestID: head.RequestID, LeaseID: head.LeaseID, ModelID: head.ModelID, Operation: head.Operation, EvaluationID: evidence.EvaluationID, Cause: ErrAdmissionCapacity})
 			return "", admissionReject
 		}
-		return "", s.waitForAdmissionLocked(head, evidence, deadline, options)
+		outcome = observe.OutcomeWaiting
+		s.observeEvaluationLocked(recorder, request, evidence, evaluationDuration, outcome)
+		return "", s.waitForAdmissionLocked(head, evidence, deadline, options, previousWait)
 	case AdmissionUnknown:
 		switch options.OnUnknown {
 		case "reject":
+			outcome = observe.OutcomeRejected
+			s.observeEvaluationLocked(recorder, request, evidence, evaluationDuration, outcome)
 			s.failAdmissionHeadLocked(head, &AdmissionError{Kind: AdmissionErrorUnavailable, RequestID: head.RequestID, LeaseID: head.LeaseID, ModelID: head.ModelID, Operation: head.Operation, EvaluationID: evidence.EvaluationID, Cause: ErrAdmissionUnavailable})
 			return "", admissionReject
 		case "wait":
-			return "", s.waitForAdmissionLocked(head, evidence, deadline, options)
+			outcome = observe.OutcomeWaiting
+			s.observeEvaluationLocked(recorder, request, evidence, evaluationDuration, outcome)
+			return "", s.waitForAdmissionLocked(head, evidence, deadline, options, previousWait)
 		default:
 			// allow: continue to the final check, recording the risk.
+			policyAction = "ALLOW_UNKNOWN"
 		}
 	default:
-		return "", s.waitForAdmissionLocked(head, evidence, deadline, options)
+		outcome = observe.OutcomeWaiting
+		s.observeEvaluationLocked(recorder, request, evidence, evaluationDuration, outcome)
+		return "", s.waitForAdmissionLocked(head, evidence, deadline, options, previousWait)
 	}
 
 	// Final check, serialized under s.mu. Anything that fails discards the
@@ -116,14 +152,24 @@ func (s *Scheduler) admitHeadLocked() (string, admissionOutcome) {
 		s.admissionWait = nil
 		s.scheduleAdmissionWake(time.Now().Add(options.ReevaluationInterval))
 		s.notify()
+		// The discarded evaluation authorized nothing. It is still an
+		// evaluation and it is counted once, with no admitted outcome.
+		outcome = observe.OutcomeWaiting
+		s.observeEvaluationLocked(recorder, request, evidence, evaluationDuration, outcome)
 		return "", admissionWaiting
 	}
 	s.admissionWait = nil
 	s.stopAdmissionTimerLocked()
 	delete(s.admissionDeadline, request.LeaseID)
 	if !s.commitHeadLocked(request.LeaseID) {
+		outcome = observe.OutcomeWaiting
+		s.observeEvaluationLocked(recorder, request, evidence, evaluationDuration, outcome)
 		return "", admissionWaiting
 	}
+	// The continuation is observed once, after the commit: the authorization
+	// only exists once the head was actually committed.
+	s.observeEvaluationLocked(recorder, request, evidence, evaluationDuration, outcome)
+	s.observeContinuationLocked(recorder, request, evidence, policyAction)
 	return request.LeaseID, admissionProceed
 }
 
@@ -197,20 +243,36 @@ func (s *Scheduler) evaluateAdmission(evaluator AdmissionEvaluator, provider Adm
 	return evaluator.Evaluate(ctx, request)
 }
 
+// previousWaitWaitingSince returns the instant the current capacity wait
+// started. A reevaluation never restarts the wait, so the start of the
+// previous wait is carried over. A nil previous wait means the wait starts
+// now.
+func previousWaitWaitingSince(previousWait *admissionWait) time.Time {
+	if previousWait == nil {
+		return time.Now()
+	}
+	return previousWait.waitingSince
+}
+
 // waitForAdmissionLocked records the internal WAITING_CAPACITY phase for the
 // head and arranges the next reevaluation. The lease stays QUEUED, keeps its
 // FIFO position and holds no runtime resource: no process, no reservation, no
 // TTL extension and no heartbeat.
 //
 // s.mu must be held.
-func (s *Scheduler) waitForAdmissionLocked(head AdmissionRequest, evidence AdmissionEvidence, deadline time.Time, options AdmissionOptions) admissionOutcome {
+func (s *Scheduler) waitForAdmissionLocked(head AdmissionRequest, evidence AdmissionEvidence, deadline time.Time, options AdmissionOptions, previousWait *admissionWait) admissionOutcome {
 	next := time.Now().Add(options.ReevaluationInterval)
 	if !deadline.IsZero() && deadline.Before(next) {
 		next = deadline
 	}
-	s.admissionWait = &admissionWait{phase: admissionPhaseWaiting, leaseID: head.LeaseID, generation: head.Generation, deadline: deadline, nextEvaluation: next, reason: string(evidence.Verdict)}
+	// The wait time is measured from the first wait of this lease and
+	// generation: a reevaluation never restarts it.
+	waitingSince := previousWaitWaitingSince(previousWait)
+	reevaluation := previousWait != nil
+	s.admissionWait = &admissionWait{phase: admissionPhaseWaiting, leaseID: head.LeaseID, generation: head.Generation, deadline: deadline, nextEvaluation: next, reason: string(evidence.Verdict), requestID: head.RequestID, modelID: head.ModelID, waitingSince: waitingSince}
 	s.scheduleAdmissionWake(next)
 	s.notify()
+	s.observeWaitLocked(s.admissionRecorder, head, evidence, reevaluation)
 	return admissionWaiting
 }
 
@@ -260,6 +322,18 @@ func (s *Scheduler) cancelAdmissionWaitLocked(leaseID string) {
 	if wait.leaseID != "" && wait.leaseID != leaseID {
 		return
 	}
+	// The wait is confirmed cancelled here, so the terminal event is recorded
+	// exactly once: the wait state is cleared before returning and no later
+	// timeout or rejection can record a second terminal event for it.
+	//
+	// The event is recorded in both phases. A wait in EVALUATING is a real
+	// wait: the lease is the FIFO head and it is waiting for capacity. The
+	// cancellation ends it, so it must be observable. The late evaluation
+	// that may still be running is discarded by the revalidation, and it
+	// records no terminal event of its own.
+	if wait.phase == admissionPhaseWaiting || wait.phase == admissionPhaseEvaluating {
+		s.observeTerminalLocked(s.admissionRecorder, observe.EventCancellation, AdmissionRequest{LeaseID: wait.leaseID, RequestID: wait.requestID, ModelID: wait.modelID, Generation: wait.generation}, wait.reason, ErrAdmissionCancelled.Error(), wait.waitingSince)
+	}
 	s.admissionWait = nil
 	s.stopAdmissionTimerLocked()
 	delete(s.admissionDeadline, leaseID)
@@ -276,6 +350,18 @@ func (s *Scheduler) failAdmissionHeadLocked(head AdmissionRequest, admissionErr 
 		s.stopAdmissionTimerLocked()
 		s.notify()
 		return
+	}
+	// The terminal event is recorded once, before the wait state is cleared.
+	// A timeout is the only terminal event emitted here: a rejection is
+	// already recorded as the outcome of its evaluation.
+	if admissionErr.Kind == AdmissionErrorTimeout {
+		waitingSince := time.Time{}
+		verdict := ""
+		if wait := s.admissionWait; wait != nil && wait.leaseID == head.LeaseID {
+			waitingSince = wait.waitingSince
+			verdict = wait.reason
+		}
+		s.observeTerminalLocked(s.admissionRecorder, observe.EventTimeout, head, verdict, ErrAdmissionTimeout.Error(), waitingSince)
 	}
 	proposed := cloneLease(*lease)
 	proposed.State = Cancelled

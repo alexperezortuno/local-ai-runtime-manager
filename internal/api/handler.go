@@ -9,6 +9,7 @@ import (
 	"sort"
 	"sync/atomic"
 
+	"local-ai-runtime/internal/admission/observe"
 	"local-ai-runtime/internal/capacity"
 	"local-ai-runtime/internal/config"
 	"local-ai-runtime/internal/inference"
@@ -87,6 +88,11 @@ func newHandler(manager *runtime.Manager, sched *scheduler.Scheduler, proxy conf
 	mux.HandleFunc("GET /api/v1/capacity", h.capacityQuery)
 	mux.HandleFunc("GET /api/v1/capacity/evaluations", h.capacityEvaluations)
 	mux.HandleFunc("GET /api/v1/capacity/{model}", h.capacityPlan)
+	// The admission diagnostics are read-only. They expose the enforcement
+	// counters and events; they never expose a decision authority and never
+	// mutate the Scheduler.
+	mux.HandleFunc("GET /api/v1/admission/metrics", h.admissionMetrics)
+	mux.HandleFunc("GET /api/v1/admission/events", h.admissionEvents)
 	mux.HandleFunc("GET /api/v1/recovery/status", h.recoveryStatus)
 	mux.HandleFunc("GET /api/v1/recovery/inferences", h.recoveryInferences)
 	mux.HandleFunc("GET /api/v1/recovery/leases", h.recoveryLeases)
@@ -254,6 +260,42 @@ func (h *Handler) writeCapacity(w http.ResponseWriter, r *http.Request, model st
 		return
 	}
 	writeJSON(w, http.StatusOK, h.planner.Plan(r.Context(), model))
+}
+
+// admissionMetrics exposes the read-only admission enforcement counters.
+//
+// With admission disabled the recorder is absent and the endpoint reports
+// zeroed counters rather than an error: the diagnostics surface stays
+// available and never invents a decision.
+func (h *Handler) admissionMetrics(w http.ResponseWriter, _ *http.Request) {
+	recorder := h.admissionRecorder()
+	if recorder == nil {
+		writeJSON(w, http.StatusOK, observe.Metrics{Evaluations: map[string]uint64{}})
+		return
+	}
+	writeJSON(w, http.StatusOK, recorder.Metrics())
+}
+
+// admissionEvents exposes the recent admission enforcement events.
+//
+// The events are observations of decisions already taken. The ring buffer is
+// bounded, so the endpoint never grows without limit.
+func (h *Handler) admissionEvents(w http.ResponseWriter, _ *http.Request) {
+	recorder := h.admissionRecorder()
+	if recorder == nil {
+		writeJSON(w, http.StatusOK, []observe.Event{})
+		return
+	}
+	writeJSON(w, http.StatusOK, recorder.Events())
+}
+
+// admissionRecorder returns the installed admission recorder, or nil when the
+// admission instrumentation is not installed.
+func (h *Handler) admissionRecorder() *observe.Recorder {
+	if h == nil || h.scheduler == nil {
+		return nil
+	}
+	return h.scheduler.AdmissionRecorder()
 }
 
 func (h *Handler) recoveryStatus(w http.ResponseWriter, _ *http.Request) {

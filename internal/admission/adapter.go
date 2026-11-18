@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"local-ai-runtime/internal/admission/observe"
 	"local-ai-runtime/internal/capacity"
 	"local-ai-runtime/internal/config"
 	"local-ai-runtime/internal/scheduler"
@@ -174,6 +175,7 @@ type Wiring struct {
 	evaluator *capacity.Evaluator
 	adapter   *Evaluator
 	provider  *ContextProvider
+	recorder  *observe.Recorder
 }
 
 // Install builds the capacity admission evaluator and installs it into the
@@ -202,6 +204,9 @@ func Install(sched *scheduler.Scheduler, planner capacity.PlanSource, options sc
 	}
 	adapter := New(evaluator)
 	provider := NewContextProvider()
+	// The recorder observes enforcement decisions. It never influences them:
+	// the Scheduler keeps its own verdict, priority and deadline authority.
+	recorder := observe.NewRecorder(observe.DefaultEventLimit)
 	// The options and the evaluator are installed before the Scheduler can
 	// accept a request, so no acquisition is ever evaluated without a policy.
 	if err := sched.SetAdmissionOptions(normalized); err != nil {
@@ -209,6 +214,7 @@ func Install(sched *scheduler.Scheduler, planner capacity.PlanSource, options sc
 		return nil, err
 	}
 	sched.SetAdmissionContextProvider(provider)
+	sched.SetAdmissionRecorder(recorder)
 	// A previous evaluator is released: the Scheduler never runs two
 	// evaluators, and no worker is duplicated.
 	if previous := sched.SetAdmissionEvaluator(adapter); previous != nil {
@@ -216,7 +222,7 @@ func Install(sched *scheduler.Scheduler, planner capacity.PlanSource, options sc
 			_ = closer.Close()
 		}
 	}
-	return &Wiring{evaluator: evaluator, adapter: adapter, provider: provider}, nil
+	return &Wiring{evaluator: evaluator, adapter: adapter, provider: provider, recorder: recorder}, nil
 }
 
 // InstallFromConfig builds and installs the capacity admission evaluator when
@@ -243,6 +249,18 @@ func InstallFromConfig(sched *scheduler.Scheduler, planner capacity.PlanSource, 
 		MaxSnapshotAge: admission.SnapshotAgeDuration(),
 	}
 	return Install(sched, planner, options, evaluatorOptions)
+}
+
+// Recorder returns the admission observability recorder of this wiring, or
+// nil when the wiring does not carry one.
+//
+// The recorder is read-only for diagnostics: it exposes counters and the
+// recent event ring buffer, never a decision.
+func (w *Wiring) Recorder() *observe.Recorder {
+	if w == nil {
+		return nil
+	}
+	return w.recorder
 }
 
 // Close releases the admission workers. It is safe to call more than once.

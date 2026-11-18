@@ -178,7 +178,7 @@ func readOnlyCommandIndex(args []string) int {
 
 func isReadOnlyCommand(command string) bool {
 	switch command {
-	case "models", "status", "queue", "capacity", "capacity-evaluations", "doctor":
+	case "models", "status", "queue", "capacity", "capacity-evaluations", "admission-metrics", "admission-events", "doctor":
 		return true
 	default:
 		return false

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 	"testing"
 	"time"
 
@@ -95,6 +96,40 @@ func TestCleanShutdownDoesNotRequireRecovery(t *testing.T) {
 	}
 	if status := restarted.RecoveryStatus(); status.RecoveryRequired || !status.AdmissionAllowed {
 		t.Fatalf("clean restart status = %+v", status)
+	}
+}
+
+func TestJournalProcessInstancesAreDeterministicallySorted(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "recovery.json")
+	j, err := OpenJournal(JournalOptions{Path: path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownerID := j.OwnerInstanceID()
+	ids := make([]string, 3)
+	for i := range ids {
+		ids[i], err = corecontract.NewID()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	sort.Strings(ids)
+	for i := len(ids) - 1; i >= 0; i-- {
+		if err := j.PersistProcess(corecontract.ProcessInstance{SchemaVersion: corecontract.ContractVersion, ProcessInstanceID: ids[i], OwnerInstanceID: ownerID, LARMInstanceID: ownerID, ModelID: "model-" + ids[i], ConfigFingerprint: "sha256:test", State: corecontract.ProcessFailed, RecoveryState: corecontract.RecoveryNormal}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := ids
+	for repeat := 0; repeat < 20; repeat++ {
+		instances := j.ProcessInstances()
+		if len(instances) != len(want) {
+			t.Fatalf("instances = %d, want %d", len(instances), len(want))
+		}
+		for i, id := range want {
+			if instances[i].ProcessInstanceID != id {
+				t.Fatalf("instances[%d] = %q, want %q", i, instances[i].ProcessInstanceID, id)
+			}
+		}
 	}
 }
 

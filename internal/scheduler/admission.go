@@ -253,4 +253,13 @@ type admissionWait struct {
 	nextEvaluation time.Time
 	reason         string
 	lastError      error
+	// requestID and modelID keep the correlation identifiers of the waiting
+	// request, so a terminal event can be correlated even when the caller
+	// only knows the lease ID.
+	requestID string
+	modelID   string
+	// waitingSince is the instant the current capacity wait started. It is
+	// carried across reevaluations so the total wait time is measured from
+	// the first wait, not from the last reevaluation.
+	waitingSince time.Time
 }

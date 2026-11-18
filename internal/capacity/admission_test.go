@@ -109,7 +109,6 @@ func TestADMISSION15StalePartialAndLateResultsDoNotFit(t *testing.T) {
 		result, _ := evaluator.Evaluate(ctx, admissionInput(NewLoad))
 		done <- result
 	}()
-	time.Sleep(time.Millisecond)
 	cancel()
 	result := <-done
 	if result.Status != EvaluationCancelled || result.Verdict == Fit {
