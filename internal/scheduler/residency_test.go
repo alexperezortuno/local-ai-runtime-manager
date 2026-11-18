@@ -445,7 +445,7 @@ func residencyScheduler(t *testing.T, capacity int, policies map[string]config.M
 		_ = listener.Close()
 		policy.Path, policy.Port = modelPath, port
 		policy.Context, policy.Batch, policy.UBatch, policy.GPULayers, policy.Parallel = 4096, 512, 128, "all", 1
-		policy.Temperature, policy.TopP, policy.TopK = 0.2, 0.9, 40
+		policy.Temperature, policy.TopP, policy.TopK = ptr(0.2), ptr(0.9), ptr(40)
 		configured[id] = policy
 	}
 	owner, err := corecontract.NewID()

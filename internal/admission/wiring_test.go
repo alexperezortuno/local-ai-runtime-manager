@@ -14,6 +14,10 @@ import (
 	"local-ai-runtime/internal/scheduler"
 )
 
+func ptr[T any](value T) *T {
+	return &value
+}
+
 // wiringPlanSource is a deterministic read-only planner.
 type wiringPlanSource struct {
 	calls atomic.Int64
@@ -33,7 +37,7 @@ func wiringScheduler(t *testing.T) *scheduler.Scheduler {
 	}
 	manager := runtime.NewManager(config.Config{
 		Runtime: config.RuntimeConfig{Backend: "llamacpp", Binary: "fixture", StartupTimeout: "2s", ShutdownTimeout: "1s"},
-		Models:  map[string]config.ModelConfig{"model-1": {Path: modelPath, Port: 18099, Context: 1024, Batch: 128, UBatch: 32, GPULayers: "all", Parallel: 1, Temperature: 0.2, TopP: 0.9}},
+		Models:  map[string]config.ModelConfig{"model-1": {Path: modelPath, Port: 18099, Context: 1024, Batch: 128, UBatch: 32, GPULayers: "all", Parallel: 1, Temperature: ptr(0.2), TopP: ptr(0.9)}},
 	})
 	sched := scheduler.New(manager, config.SchedulerConfig{MaxQueueSize: 5, LeaseTTL: "5s", Heartbeat: "1s", MaxLease: "30s"})
 	t.Cleanup(func() {

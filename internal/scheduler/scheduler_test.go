@@ -21,6 +21,10 @@ import (
 	runtime "local-ai-runtime/internal/runtime"
 )
 
+func ptr[T any](value T) *T {
+	return &value
+}
+
 func TestMain(m *testing.M) {
 	if os.Getenv("LARM_SCHEDULER_CHILD") == "1" {
 		port := ""
@@ -831,7 +835,7 @@ func testSchedulerWithStore(t *testing.T, mode string, modelsCount int, startup,
 	t.Setenv("LARM_SCHEDULER_EVENTS", eventsPath)
 	configured := make(map[string]config.ModelConfig, modelsCount)
 	for i := range ports {
-		configured[fmt.Sprintf("model-%d", i+1)] = config.ModelConfig{Path: modelPath, Port: ports[i], Context: 4096, Batch: 512, UBatch: 128, GPULayers: "all", Parallel: 1, Temperature: 0.2, TopP: 0.9, TopK: 40}
+		configured[fmt.Sprintf("model-%d", i+1)] = config.ModelConfig{Path: modelPath, Port: ports[i], Context: 4096, Batch: 512, UBatch: 128, GPULayers: "all", Parallel: 1, Temperature: ptr(0.2), TopP: ptr(0.9), TopK: ptr(40)}
 	}
 	cfg := config.Config{Runtime: config.RuntimeConfig{Backend: "llamacpp", Binary: binary, StartupTimeout: startup.String(), ShutdownTimeout: shutdown.String()}, Models: configured}
 	manager := runtime.NewManager(cfg)

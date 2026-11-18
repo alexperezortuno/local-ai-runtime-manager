@@ -98,9 +98,9 @@ type ModelConfig struct {
 	CacheTypeK  string   `yaml:"cache_type_k"`
 	CacheTypeV  string   `yaml:"cache_type_v"`
 	Parallel    int      `yaml:"parallel"`
-	Temperature float64  `yaml:"temperature"`
-	TopP        float64  `yaml:"top_p"`
-	TopK        int      `yaml:"top_k"`
+	Temperature *float64 `yaml:"temperature"`
+	TopP        *float64 `yaml:"top_p"`
+	TopK        *int     `yaml:"top_k"`
 	LogFile     string   `yaml:"log_file"`
 	Reasoning   string   `yaml:"reasoning"`
 	ExtraArgs   []string `yaml:"extra_args"`
@@ -327,7 +327,13 @@ func (c *Config) Validate() error {
 		if model.Context <= 0 || model.Batch <= 0 || model.UBatch <= 0 || model.UBatch > model.Batch || model.Parallel <= 0 {
 			return fmt.Errorf("models.%s context, batch, ubatch and parallel must be positive, with ubatch <= batch", id)
 		}
-		if math.IsNaN(model.Temperature) || math.IsInf(model.Temperature, 0) || math.IsNaN(model.TopP) || math.IsInf(model.TopP, 0) || model.Temperature < 0 || model.TopP <= 0 || model.TopP > 1 || model.TopK < 0 {
+		if model.Temperature != nil && (math.IsNaN(*model.Temperature) || math.IsInf(*model.Temperature, 0) || *model.Temperature < 0) {
+			return fmt.Errorf("models.%s has invalid sampling parameters", id)
+		}
+		if model.TopP != nil && (math.IsNaN(*model.TopP) || math.IsInf(*model.TopP, 0) || *model.TopP <= 0 || *model.TopP > 1) {
+			return fmt.Errorf("models.%s has invalid sampling parameters", id)
+		}
+		if model.TopK != nil && *model.TopK < 0 {
 			return fmt.Errorf("models.%s has invalid sampling parameters", id)
 		}
 		if model.GPULayers != "all" {

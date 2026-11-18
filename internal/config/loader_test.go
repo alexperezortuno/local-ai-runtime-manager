@@ -31,6 +31,69 @@ func TestLoadValidYAML(t *testing.T) {
 	}
 }
 
+func TestLoadOptionalSamplingParameters(t *testing.T) {
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "llama-server")
+	model := filepath.Join(dir, "model.gguf")
+	_ = os.WriteFile(binary, []byte("binary"), 0755)
+	_ = os.WriteFile(model, []byte("model"), 0600)
+
+	for _, test := range []struct {
+		name  string
+		extra string
+	}{
+		{name: "all omitted"},
+		{name: "temperature only", extra: "    temperature: 0.2\n"},
+		{name: "top_p only", extra: "    top_p: 0.9\n"},
+		{name: "top_k only", extra: "    top_k: 40\n"},
+		{name: "top_k zero", extra: "    top_k: 0\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(dir, "models.yaml")
+			content := validYAML(model)
+			content = strings.Replace(content, "binary: /test/llama-server", "binary: "+binary, 1)
+			content = strings.Replace(content, "    top_p: 0.9\n", test.extra, 1)
+			if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(path); err != nil {
+				t.Fatalf("configuration rejected: %v", err)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsOutOfRangeSamplingParameters(t *testing.T) {
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "llama-server")
+	model := filepath.Join(dir, "model.gguf")
+	_ = os.WriteFile(binary, []byte("binary"), 0755)
+	_ = os.WriteFile(model, []byte("model"), 0600)
+
+	for _, test := range []struct {
+		name  string
+		extra string
+	}{
+		{name: "negative temperature", extra: "    temperature: -0.1\n"},
+		{name: "zero top_p", extra: "    top_p: 0\n"},
+		{name: "top_p above one", extra: "    top_p: 1.1\n"},
+		{name: "negative top_k", extra: "    top_k: -1\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(dir, "models.yaml")
+			content := validYAML(model)
+			content = strings.Replace(content, "binary: /test/llama-server", "binary: "+binary, 1)
+			content = strings.Replace(content, "    top_p: 0.9\n", test.extra, 1)
+			if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Load(path); err == nil {
+				t.Fatal("expected invalid sampling parameters to be rejected")
+			}
+		})
+	}
+}
+
 func TestLoadResidencyPolicy(t *testing.T) {
 	dir := t.TempDir()
 	binary := filepath.Join(dir, "llama-server")

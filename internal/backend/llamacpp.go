@@ -17,7 +17,16 @@ func Args(model config.ModelConfig) []string {
 	if model.CacheTypeV != "" {
 		args = append(args, "--cache-type-v", model.CacheTypeV)
 	}
-	args = append(args, "--parallel", fmt.Sprint(model.Parallel), "--temp", fmt.Sprint(model.Temperature), "--top-p", fmt.Sprint(model.TopP), "--top-k", fmt.Sprint(model.TopK))
+	args = append(args, "--parallel", fmt.Sprint(model.Parallel))
+	if model.Temperature != nil {
+		args = append(args, "--temp", fmt.Sprint(*model.Temperature))
+	}
+	if model.TopP != nil {
+		args = append(args, "--top-p", fmt.Sprint(*model.TopP))
+	}
+	if model.TopK != nil {
+		args = append(args, "--top-k", fmt.Sprint(*model.TopK))
+	}
 
 	if model.LogFile != "" {
 		args = append(args, "--log-file", fmt.Sprint(model.LogFile))

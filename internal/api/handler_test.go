@@ -24,6 +24,10 @@ import (
 	"local-ai-runtime/internal/scheduler"
 )
 
+func ptr[T any](value T) *T {
+	return &value
+}
+
 func TestMain(m *testing.M) {
 	if os.Getenv("LARM_API_CHILD") == "1" {
 		port := ""
@@ -463,7 +467,7 @@ func apiTestSchedulerWithTTL(t *testing.T, ttl string) (*runtime.Manager, *sched
 		}
 		port := listener.Addr().(*net.TCPAddr).Port
 		_ = listener.Close()
-		models[fmt.Sprintf("model-%d", i)] = config.ModelConfig{Path: modelPath, Port: port, Context: 1024, Batch: 128, UBatch: 32, GPULayers: "all", Parallel: 1, Temperature: 0.2, TopP: 0.9}
+		models[fmt.Sprintf("model-%d", i)] = config.ModelConfig{Path: modelPath, Port: port, Context: 1024, Batch: 128, UBatch: 32, GPULayers: "all", Parallel: 1, Temperature: ptr(0.2), TopP: ptr(0.9)}
 	}
 	binary, err := os.Executable()
 	if err != nil {

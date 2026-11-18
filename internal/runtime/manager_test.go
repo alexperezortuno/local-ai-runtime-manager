@@ -19,6 +19,10 @@ import (
 	"local-ai-runtime/internal/corecontract"
 )
 
+func ptr[T any](value T) *T {
+	return &value
+}
+
 func TestMain(m *testing.M) {
 	if os.Getenv("LARM_TEST_CHILD") == "1" {
 		runChild()
@@ -334,7 +338,7 @@ func testManager(t *testing.T, mode string, modelCount int, startup, shutdown ti
 	configured := make(map[string]config.ModelConfig, modelCount)
 	for i := 0; i < modelCount; i++ {
 		id := fmt.Sprintf("model-%d", i+1)
-		configured[id] = config.ModelConfig{Path: modelPath, Port: ports[i], Context: 4096, Batch: 512, UBatch: 128, GPULayers: "all", Parallel: 1, Temperature: 0.2, TopP: 0.9, TopK: 40}
+		configured[id] = config.ModelConfig{Path: modelPath, Port: ports[i], Context: 4096, Batch: 512, UBatch: 128, GPULayers: "all", Parallel: 1, Temperature: ptr(0.2), TopP: ptr(0.9), TopK: ptr(40)}
 	}
 	cfg := config.Config{Runtime: config.RuntimeConfig{Backend: "llamacpp", Binary: binary, StartupTimeout: startup.String(), ShutdownTimeout: shutdown.String()}, Models: configured}
 	m := NewManager(cfg)
