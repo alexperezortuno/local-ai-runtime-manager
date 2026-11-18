@@ -13,7 +13,7 @@ LARM es un servicio Go independiente de clientes e IDEs que registra modelos GGU
 - `internal/api`: API HTTP con `net/http`.
 - `cmd/larm`: carga configuración, escucha y apagado ordenado.
 
-La API solo acepta direcciones IP loopback (`127.0.0.1` o `::1`); una dirección LAN se rechaza al validar la configuración.
+El listener HTTP local solo acepta direcciones IP loopback (`127.0.0.1` o `::1`). Un listener LAN nativo, explícito y separado puede habilitarse mediante `server.lan`; utiliza TLS, autenticación Bearer y una allowlist CIDR, y publica únicamente el endpoint de comprobación autenticada `GET /api/v1/lan/health`.
 
 ## Requisitos
 
@@ -82,6 +82,100 @@ scheduler:
 ```
 
 Al iniciar se validan el binario ejecutable, los archivos, los IDs, puertos y parámetros. Cada modelo necesita un puerto propio, distinto del puerto de la API.
+
+### Listener LAN autenticado
+
+El listener LAN está deshabilitado por defecto y es independiente del listener local. Para habilitarlo se requiere un certificado TLS, una clave privada y al menos una API key definida en una variable de entorno. No se admiten credenciales dentro del YAML ni conexión HTTP sin cifrar.
+
+```yaml
+server:
+  host: "127.0.0.1"
+  port: 8090
+  lan:
+    enabled: true
+    host: "192.168.1.20"
+    port: 8443
+    auth:
+      type: "bearer"
+      api_keys_env: "LARM_LAN_API_KEYS"
+    access:
+      allow:
+        - "192.168.1.0/24"
+    tls:
+      cert_file: "/absolute/path/to/lan-cert.pem"
+      key_file: "/absolute/path/to/lan-key.pem"
+```
+
+Los certificados son necesarios porque el listener LAN cifra el tráfico entre el host y los clientes remotos. El certificado debe incluir el nombre o la IP por la que se accede al servicio. Para un entorno interno controlado puede utilizarse una CA privada; no se debe reutilizar un certificado autofirmado sin distribuir y verificar su CA en los clientes.
+
+Crear una CA privada y un certificado LAN:
+
+```bash
+# Directorio privado para la CA y los certificados.
+install -d -m 700 /path/to/larm-tls
+cd /path/to/larm-tls
+
+# CA privada: conservar fuera del directorio servido por LARM.
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 -out larm-ca-key.pem
+chmod 600 larm-ca-key.pem
+openssl req -x509 -new -sha256 -days 3650 \
+  -key larm-ca-key.pem \
+  -out larm-ca-cert.pem \
+  -subj "/CN=LARM Private CA"
+
+# Clave y CSR del listener. Sustituir 192.168.1.20 por su IP accesible.
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 -out lan-key.pem
+chmod 600 lan-key.pem
+openssl req -new -sha256 \
+  -key lan-key.pem \
+  -out lan.csr \
+  -subj "/CN=192.168.1.20"
+
+# Certificado SAN: incluye la IP; sustituir por el DNS si los clientes usan un nombre.
+cat > lan-ext.cnf <<'EOF'
+subjectAltName = IP:192.168.1.20,DNS:larm.lan.internal
+extendedKeyUsage = serverAuth
+keyUsage = digitalSignature,keyEncipherment
+EOF
+openssl x509 -req -sha256 -days 825 \
+  -in lan.csr \
+  -CA larm-ca-cert.pem \
+  -CAkey larm-ca-key.pem \
+  -CAcreateserial \
+  -out lan-cert.pem \
+  -extfile lan-ext.cnf
+
+# Comprobación del certificado y su clave privada.
+openssl x509 -in lan-cert.pem -noout -subject -issuer -dates
+openssl pkey -in lan-key.pem -check -noout
+```
+
+Instalar la CA pública en los clientes que deben verificar el listener y usar el certificado de servidor:
+
+```bash
+export LARM_LAN_API_KEYS='replace-with-a-long-random-secret'
+export LARM_LAN_CA_FILE=/path/to/larm-tls/larm-ca-cert.pem
+
+# Verificar el certificado y la cadena antes de iniciar LARM.
+openssl verify -CAfile "$LARM_LAN_CA_FILE" lan-cert.pem
+
+# Cliente de ejemplo; la API key sólo se envía en el header Authorization.
+curl --cacert "$LARM_LAN_CA_FILE" \
+  -H "Authorization: Bearer $LARM_LAN_API_KEYS" \
+  https://192.169.0.228:8443/api/v1/lan/health
+```
+
+Para pruebas locales puede generarse un certificado autofirmado, pero los clientes deberán configurarlo explícitamente:
+
+```bash
+openssl req -x509 -newkey rsa:4096 -sha256 -nodes -days 365 \
+  -keyout lan-selfsigned-key.pem \
+  -out lan-selfsigned-cert.pem \
+  -subj "/CN=192.168.1.20" \
+  -addext "subjectAltName=IP:192.168.1.20,DNS:larm.lan.internal"
+```
+
+En producción es preferible una CA privada administrada por el operador o por la infraestructura, con renovación y revocación controladas. Las rutas `cert_file` y `key_file` deben ser absolutas; la clave privada debe tener permisos restrictivos y no se debe registrar ni almacenar en el YAML.
 
 ## CLI operativa
 
@@ -226,7 +320,8 @@ El proxy reenvía las respuestas JSON y los eventos SSE de `llama-server`, inclu
 ## Limitaciones actuales
 
 - Solo implementa los tres endpoints listados; no incluye Responses API, audio, imágenes ni otros endpoints OpenAI.
-- No incluye prioridades, persistencia de cola, gestor de memoria RAM/VRAM ni autenticación multiusuario.
+- No incluye prioridades, persistencia de cola, gestor de memoria RAM/VRAM ni autenticación multiusuario del listener local.
+- El listener LAN publica únicamente una comprobación autenticada; no expone inferencias, administración, procesos, configuración, leases ni journal.
 - Solo administra procesos `llama-server` iniciados por LARM; no adopta procesos externos.
 - No valida que el modelo pueda cargarse en la memoria/GPU disponible; readiness lo determina el endpoint `/health`.
 - Los argumentos avanzados dependen de la versión/compilación de `llama-server` instalada.

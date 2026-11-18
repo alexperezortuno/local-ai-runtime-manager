@@ -2,6 +2,23 @@ server:
   host: "127.0.0.1"
   port: 8090
 
+  # Native LAN listener. Disabled by default. When enabled, API keys are read
+  # from the named environment variable and TLS is mandatory. Never put API
+  # keys directly in this YAML file.
+  lan:
+    enabled: false
+    host: "192.168.1.20"
+    port: 8443
+    auth:
+      type: "bearer"
+      api_keys_env: "LARM_LAN_API_KEYS"
+    access:
+      allow:
+        - "192.168.1.0/24"
+    tls:
+      cert_file: "/absolute/path/to/lan-cert.pem"
+      key_file: "/absolute/path/to/lan-key.pem"
+
 runtime:
   backend: "llamacpp"
   binary: "/path/to/llama-server"
@@ -89,7 +106,7 @@ models:
     top_k: 40
     reasoning: "off"
     # keep_alive has precedence and also requests automatic background preload.
-     keep_alive: true
+    keep_alive: true
     time_alive: "0s" # keep_alive takes precedence
     extra_args:
       - "--jinja"

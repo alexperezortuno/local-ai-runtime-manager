@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"log"
@@ -89,6 +90,30 @@ func main() {
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+	var lanServer *http.Server
+	var lanListener net.Listener
+	if cfg.Server.LAN.Enabled {
+		lanHandler, err := api.NewLANHandler(cfg.Server.LAN)
+		if err != nil {
+			log.Fatalf("configure LAN authentication: %v", err)
+		}
+		certificate, err := tls.LoadX509KeyPair(cfg.Server.LAN.TLS.CertFile, cfg.Server.LAN.TLS.KeyFile)
+		if err != nil {
+			log.Fatalf("load LAN TLS certificate: %v", err)
+		}
+		lanServer = &http.Server{
+			Addr:              net.JoinHostPort(cfg.Server.LAN.Host, strconv.Itoa(cfg.Server.LAN.Port)),
+			Handler:           lanHandler,
+			ReadHeaderTimeout: 5 * time.Second,
+			IdleTimeout:       60 * time.Second,
+			MaxHeaderBytes:    16 << 10,
+			TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{certificate}},
+		}
+		lanListener, err = net.Listen("tcp", lanServer.Addr)
+		if err != nil {
+			log.Fatalf("LAN HTTP bind: %v", err)
+		}
+	}
 	var adminServer *adminauth.Server
 	if cfg.Admin.Enabled {
 		adminServer, err = adminauth.NewServer(cfg.Admin, registry.RecoveryStatus().LARMInstanceID, recoveryService)
@@ -101,24 +126,45 @@ func main() {
 		}
 		defer adminServer.Close()
 	}
-	serveErr := make(chan error, 1)
+	localErr := make(chan error, 1)
 	go func() {
 		log.Printf("LARM listening on %s", server.Addr)
-		serveErr <- server.ListenAndServe()
+		localErr <- server.ListenAndServe()
 	}()
+	var lanErr <-chan error
+	if lanServer != nil {
+		errs := make(chan error, 1)
+		lanErr = errs
+		go func() {
+			log.Printf("LARM LAN listening on %s", lanServer.Addr)
+			errs <- lanServer.ServeTLS(lanListener, "", "")
+		}()
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	select {
-	case err := <-serveErr:
+	case err := <-localErr:
 		if err != nil && err != http.ErrServerClosed {
 			log.Fatalf("HTTP server: %v", err)
+		}
+	case err := <-lanErr:
+		if err != nil && err != http.ErrServerClosed {
+			log.Fatalf("LAN HTTP server: %v", err)
 		}
 	case <-ctx.Done():
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if err := server.Shutdown(shutdownCtx); err != nil {
 			log.Printf("HTTP shutdown: %v", err)
+		}
+		if err := <-localErr; err != nil && err != http.ErrServerClosed {
+			log.Printf("HTTP server stopped: %v", err)
+		}
+		if lanServer != nil {
+			if err := lanServer.Shutdown(shutdownCtx); err != nil {
+				log.Printf("LAN HTTP shutdown: %v", err)
+			}
 		}
 		if adminServer != nil {
 			if err := adminServer.Close(); err != nil {

@@ -3,6 +3,7 @@ package backend
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"time"
 
@@ -10,7 +11,11 @@ import (
 )
 
 func Args(model config.ModelConfig) []string {
-	args := []string{"-m", model.Path, "--host", "127.0.0.1", "--port", fmt.Sprint(model.Port), "-c", fmt.Sprint(model.Context), "-b", fmt.Sprint(model.Batch), "-ub", fmt.Sprint(model.UBatch), "-ngl", model.GPULayers}
+	host := model.Host
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	args := []string{"-m", model.Path, "--host", host, "--port", fmt.Sprint(model.Port), "-c", fmt.Sprint(model.Context), "-b", fmt.Sprint(model.Batch), "-ub", fmt.Sprint(model.UBatch), "-ngl", model.GPULayers}
 	if model.CacheTypeK != "" {
 		args = append(args, "--cache-type-k", model.CacheTypeK)
 	}
@@ -47,8 +52,12 @@ func Args(model config.ModelConfig) []string {
 }
 
 func Healthy(ctx context.Context, port int) bool {
+	return HealthyAt(ctx, "127.0.0.1", port)
+}
+
+func HealthyAt(ctx context.Context, host string, port int) bool {
 	client := http.Client{Timeout: 500 * time.Millisecond}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://127.0.0.1:%d/health", port), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://%s/health", net.JoinHostPort(host, fmt.Sprint(port))), nil)
 	if err != nil {
 		return false
 	}

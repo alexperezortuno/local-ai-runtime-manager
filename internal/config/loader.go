@@ -2,9 +2,11 @@ package config
 
 import (
 	"bytes"
+	"crypto/tls"
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -41,5 +43,26 @@ func Load(path string) (Config, error) {
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
 	}
+	if cfg.Server.LAN.Enabled {
+		if _, err := tls.LoadX509KeyPair(cfg.Server.LAN.TLS.CertFile, cfg.Server.LAN.TLS.KeyFile); err != nil {
+			return Config{}, fmt.Errorf("server.lan.tls: %w", err)
+		}
+		if err := validateLANCredentials(cfg.Server.LAN.Auth.APIKeysEnv); err != nil {
+			return Config{}, err
+		}
+	}
 	return cfg, nil
+}
+
+func validateLANCredentials(envName string) error {
+	value := strings.TrimSpace(os.Getenv(envName))
+	if value == "" {
+		return fmt.Errorf("server.lan.auth environment variable %q is not set", envName)
+	}
+	for _, key := range strings.Split(value, ",") {
+		if strings.TrimSpace(key) == "" {
+			return fmt.Errorf("server.lan.auth environment variable %q contains an empty API key", envName)
+		}
+	}
+	return nil
 }

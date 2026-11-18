@@ -230,7 +230,11 @@ func (m *Manager) Start(ctx context.Context, id string) error {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		if backend.Healthy(startupCtx, model.Port) {
+		host := model.Host
+		if host == "" {
+			host = "127.0.0.1"
+		}
+		if backend.HealthyAt(startupCtx, host, model.Port) {
 			if _, identityErr := p.identityVerified(); identityErr != nil {
 				m.markIdentityUnknown(id, instance, identityErr)
 				return fmt.Errorf("%w: process identity could not be verified: %v", ErrUnavailable, identityErr)
@@ -935,7 +939,7 @@ func (m *Manager) Models() map[string]ModelStatus {
 		if m.recovery && state == Stopped {
 			state = RecoveryRequired
 		}
-		status := ModelStatus{ID: id, Path: model.Path, Port: model.Port, State: state, KeepAlive: model.KeepAlive, TimeAlive: model.TimeAlive, RecoveryState: "NORMAL", PreloadState: "NOT_REQUIRED"}
+		status := ModelStatus{ID: id, Path: model.Path, Host: model.Host, Port: model.Port, State: state, KeepAlive: model.KeepAlive, TimeAlive: model.TimeAlive, RecoveryState: "NORMAL", PreloadState: "NOT_REQUIRED"}
 		if m.recovery {
 			status.RecoveryState = "RECOVERY_REQUIRED"
 		}
@@ -978,6 +982,7 @@ func (m *Manager) Models() map[string]ModelStatus {
 type ModelStatus struct {
 	ID                    string                `json:"id"`
 	Path                  string                `json:"-"`
+	Host                  string                `json:"-"`
 	Port                  int                   `json:"port"`
 	State                 State                 `json:"state"`
 	PID                   int                   `json:"pid,omitempty"`

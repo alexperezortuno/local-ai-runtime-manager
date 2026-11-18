@@ -7,6 +7,17 @@ import (
 	"local-ai-runtime/internal/config"
 )
 
+func TestArgsHostDefaultsToLoopback(t *testing.T) {
+	if got := Args(config.ModelConfig{}); !slices.Contains(got, "127.0.0.1") {
+		t.Fatalf("default host = %v", got)
+	}
+	args := Args(config.ModelConfig{Host: "192.169.0.228"})
+	index := slices.Index(args, "--host")
+	if index < 0 || index+1 >= len(args) || args[index+1] != "192.169.0.228" {
+		t.Fatalf("configured host = %v", args)
+	}
+}
+
 func TestArgsSamplingParameters(t *testing.T) {
 	temperature := 0.2
 	topP := 0.9

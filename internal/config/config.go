@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -76,8 +77,32 @@ type AdminConfig struct {
 }
 
 type ServerConfig struct {
-	Host string `yaml:"host"`
-	Port int    `yaml:"port"`
+	Host string    `yaml:"host"`
+	Port int       `yaml:"port"`
+	LAN  LANConfig `yaml:"lan"`
+}
+
+type LANConfig struct {
+	Enabled bool            `yaml:"enabled"`
+	Host    string          `yaml:"host"`
+	Port    int             `yaml:"port"`
+	Auth    LANAuthConfig   `yaml:"auth"`
+	Access  LANAccessConfig `yaml:"access"`
+	TLS     LANTLSConfig    `yaml:"tls"`
+}
+
+type LANAuthConfig struct {
+	Type       string `yaml:"type"`
+	APIKeysEnv string `yaml:"api_keys_env"`
+}
+
+type LANAccessConfig struct {
+	Allow []string `yaml:"allow"`
+}
+
+type LANTLSConfig struct {
+	CertFile string `yaml:"cert_file"`
+	KeyFile  string `yaml:"key_file"`
 }
 
 type RuntimeConfig struct {
@@ -91,6 +116,7 @@ type ModelConfig struct {
 	Alias       string   `yaml:"alias"`
 	Path        string   `yaml:"path"`
 	Port        int      `yaml:"port"`
+	Host        string   `yaml:"host"`
 	Context     int      `yaml:"context"`
 	Batch       int      `yaml:"batch"`
 	UBatch      int      `yaml:"ubatch"`
@@ -268,6 +294,9 @@ func (c *Config) Validate() error {
 	if c.Server.Port < 1 || c.Server.Port > 65535 {
 		return fmt.Errorf("server.port must be between 1 and 65535")
 	}
+	if err := c.validateLAN(); err != nil {
+		return err
+	}
 	if c.Runtime.Backend == "" {
 		c.Runtime.Backend = "llamacpp"
 	}
@@ -317,12 +346,21 @@ func (c *Config) Validate() error {
 		if model.Port < 1 || model.Port > 65535 {
 			return fmt.Errorf("models.%s.port must be between 1 and 65535", id)
 		}
+		if model.Host != "" {
+			ip := net.ParseIP(model.Host)
+			if ip == nil || ip.IsLoopback() || ip.IsUnspecified() {
+				return fmt.Errorf("models.%s.host must be a non-loopback, non-unspecified IP address", id)
+			}
+		}
 		if previous, ok := ports[model.Port]; ok {
 			return fmt.Errorf("models %q and %q use duplicate port %d", previous, id, model.Port)
 		}
 		ports[model.Port] = id
 		if model.Port == c.Server.Port {
 			return fmt.Errorf("models.%s.port conflicts with server.port", id)
+		}
+		if c.Server.LAN.Enabled && model.Port == c.Server.LAN.Port {
+			return fmt.Errorf("models.%s.port conflicts with server.lan.port", id)
 		}
 		if model.Context <= 0 || model.Batch <= 0 || model.UBatch <= 0 || model.UBatch > model.Batch || model.Parallel <= 0 {
 			return fmt.Errorf("models.%s context, batch, ubatch and parallel must be positive, with ubatch <= batch", id)
@@ -349,6 +387,56 @@ func (c *Config) Validate() error {
 		duration, err := time.ParseDuration(model.TimeAlive)
 		if err != nil || duration < 0 {
 			return fmt.Errorf("models.%s.time_alive must be a non-negative duration", id)
+		}
+	}
+	return nil
+}
+
+func (c *Config) validateLAN() error {
+	lan := c.Server.LAN
+	if !lan.Enabled {
+		return nil
+	}
+	ip := net.ParseIP(lan.Host)
+	if ip == nil || ip.IsLoopback() || ip.IsUnspecified() {
+		return fmt.Errorf("server.lan.host must be a non-loopback, non-unspecified IP address")
+	}
+	if lan.Port < 1 || lan.Port > 65535 {
+		return fmt.Errorf("server.lan.port must be between 1 and 65535")
+	}
+	if lan.Port == c.Server.Port {
+		return fmt.Errorf("server.lan.port conflicts with server.port")
+	}
+	if lan.Auth.Type != "bearer" {
+		return fmt.Errorf("server.lan.auth.type must be bearer")
+	}
+	if lan.Auth.APIKeysEnv == "" {
+		return fmt.Errorf("server.lan.auth.api_keys_env is required when LAN is enabled")
+	}
+	if strings.TrimSpace(os.Getenv(lan.Auth.APIKeysEnv)) == "" {
+		return fmt.Errorf("server.lan.auth environment variable %q is not set", lan.Auth.APIKeysEnv)
+	}
+	if len(lan.Access.Allow) == 0 {
+		return fmt.Errorf("server.lan.access.allow must not be empty when LAN is enabled")
+	}
+	for _, cidr := range lan.Access.Allow {
+		if _, _, err := net.ParseCIDR(cidr); err != nil {
+			return fmt.Errorf("server.lan.access.allow contains invalid CIDR %q", cidr)
+		}
+	}
+	if lan.TLS.CertFile == "" || lan.TLS.KeyFile == "" {
+		return fmt.Errorf("server.lan.tls cert_file and key_file are required when LAN is enabled")
+	}
+	if !filepath.IsAbs(lan.TLS.CertFile) || !filepath.IsAbs(lan.TLS.KeyFile) {
+		return fmt.Errorf("server.lan.tls cert_file and key_file must be absolute paths")
+	}
+	for name, path := range map[string]string{"cert_file": lan.TLS.CertFile, "key_file": lan.TLS.KeyFile} {
+		info, err := os.Stat(path)
+		if err != nil {
+			return fmt.Errorf("server.lan.tls.%s: %w", name, err)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("server.lan.tls.%s must be a regular file", name)
 		}
 	}
 	return nil

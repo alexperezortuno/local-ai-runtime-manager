@@ -15,3 +15,7 @@ larm-recovery.json
 larm-recovery.json.operator.json
 *.pyc
 larm-*.json
+*.pem
+*.srl
+*.cnf
+*.csr

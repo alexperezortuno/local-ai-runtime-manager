@@ -306,7 +306,11 @@ func (h *Handler) serveInference(w http.ResponseWriter, r *http.Request, path st
 	}
 	_ = h.inferences.PrepareTransport(requestID)
 
-	backendURL := "http://127.0.0.1:" + strconv.Itoa(model.Port) + path
+	backendHost := model.Host
+	if backendHost == "" {
+		backendHost = "127.0.0.1"
+	}
+	backendURL := "http://" + net.JoinHostPort(backendHost, strconv.Itoa(model.Port)) + path
 	backendRequest, err := http.NewRequestWithContext(inferCtx, http.MethodPost, backendURL, bytes.NewReader(body))
 	if err != nil {
 		_ = h.inferences.FailBeforeUpstream(requestID, corecontract.ErrorBackend)
