@@ -1,0 +1,29 @@
+# Codex CLI — LARM local (reference profile)
+#
+# Contrato de perfiles de Codex CLI 0.169.0:
+#   `-p/--profile <name>` superpone `$CODEX_HOME/<name>.config.toml` sobre la
+#   configuración base del usuario. El archivo NO usa una sección
+#   `[profiles.<name>]`: las claves son de primer nivel.
+#
+# Uso previsto (NO se ejecuta automáticamente):
+#   cp configs/codex/larm-local.config.toml "$CODEX_HOME/larm-local.config.toml"
+#   codex -p larm-local
+#
+# Este archivo no modifica la configuración operativa del usuario.
+
+model = "code-agent"
+model_provider = "larm-local"
+model_context_window = 98304
+model_auto_compact_token_limit = 85000
+
+[model_providers.larm-local]
+name = "LARM local"
+# El path "/v1" + RESPONSES_PATH "/responses" produce "/v1/responses".
+base_url = "http://127.0.0.1:8090/v1"
+# Codex CLI 0.169.0 solo admite `wire_api = "responses"`.
+wire_api = "responses"
+# El listener local no exige credencial. Sin `env_key`, Codex no envía
+# ninguna cabecera Authorization al backend.
+requires_openai_auth = false
+# llama-server no implementa el transporte WebSocket de Responses.
+supports_websockets = false

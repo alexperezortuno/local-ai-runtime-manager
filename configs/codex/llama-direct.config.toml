@@ -1,0 +1,27 @@
+# Codex CLI — llama.cpp directo (reference profile)
+#
+# Contrato de perfiles de Codex CLI 0.169.0:
+#   `-p/--profile <name>` superpone `$CODEX_HOME/<name>.config.toml` sobre la
+#   configuración base del usuario. El archivo NO usa una sección
+#   `[profiles.<name>]`: las claves son de primer nivel.
+#
+# Uso previsto (NO se ejecuta automáticamente):
+#   cp configs/codex/llama-direct.config.toml "$CODEX_HOME/llama-direct.config.toml"
+#   codex -p llama-direct
+#
+# Este archivo no modifica la configuración operativa del usuario.
+
+model = "gpt-oss-20b"
+model_provider = "llama-direct"
+model_context_window = 98304
+model_auto_compact_token_limit = 85000
+
+[model_providers.llama-direct]
+name = "llama.cpp direct"
+base_url = "http://127.0.0.1:8060/v1"
+# Codex CLI 0.169.0 solo admite `wire_api = "responses"`.
+wire_api = "responses"
+# llama-server sin `--api-key` no exige credencial.
+requires_openai_auth = false
+# llama-server no implementa el transporte WebSocket de Responses.
+supports_websockets = false
