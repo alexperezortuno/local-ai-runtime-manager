@@ -15,7 +15,7 @@ func Args(model config.ModelConfig) []string {
 	if host == "" {
 		host = "127.0.0.1"
 	}
-	args := []string{"-m", model.Path, "--host", host, "--port", fmt.Sprint(model.Port), "-c", fmt.Sprint(model.Context), "-b", fmt.Sprint(model.Batch), "-ub", fmt.Sprint(model.UBatch), "-ngl", model.GPULayers}
+	args := []string{"-m", model.Path, "--host", host, "--port", fmt.Sprint(model.Port), "-c", fmt.Sprint(model.Context), "-b", fmt.Sprint(model.Batch), "-ub", fmt.Sprint(model.UBatch), "-ngl", model.EffectiveGPULayers()}
 	if model.CacheTypeK != "" {
 		args = append(args, "--cache-type-k", model.CacheTypeK)
 	}
@@ -31,6 +31,51 @@ func Args(model config.ModelConfig) []string {
 	}
 	if model.TopK != nil {
 		args = append(args, "--top-k", fmt.Sprint(*model.TopK))
+	}
+	if model.PresencePenalty != nil {
+		args = append(args, "--presence-penalty", fmt.Sprint(*model.PresencePenalty))
+	}
+	if model.FrequencyPenalty != nil {
+		args = append(args, "--frequency-penalty", fmt.Sprint(*model.FrequencyPenalty))
+	}
+	if model.NPredict != nil {
+		args = append(args, "--n-predict", fmt.Sprint(*model.NPredict))
+	}
+	if model.RepeatPenalty != nil {
+		args = append(args, "--repeat-penalty", fmt.Sprint(*model.RepeatPenalty))
+	}
+	if model.FlashAttn != nil {
+		args = append(args, "--flash-attn", *model.FlashAttn)
+	}
+	if model.Device != nil {
+		args = append(args, "--device", *model.Device)
+	}
+	if model.SplitMode != nil {
+		args = append(args, "--split-mode", *model.SplitMode)
+	}
+	if model.Metrics != nil && *model.Metrics {
+		args = append(args, "--metrics")
+	}
+	if model.Fit != nil {
+		value := "off"
+		if *model.Fit {
+			value = "on"
+		}
+		args = append(args, "--fit", value)
+	}
+	if model.CachePrompt != nil {
+		flag := "--no-cache-prompt"
+		if *model.CachePrompt {
+			flag = "--cache-prompt"
+		}
+		args = append(args, flag)
+	}
+	if model.NoNMProj != nil {
+		flag := "--mmproj-auto"
+		if *model.NoNMProj {
+			flag = "--no-mmproj"
+		}
+		args = append(args, flag)
 	}
 
 	if model.LogFile != "" {

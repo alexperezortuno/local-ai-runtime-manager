@@ -113,6 +113,7 @@ func newHandler(manager *runtime.Manager, sched *scheduler.Scheduler, proxy conf
 		mux.HandleFunc("GET /api/v1/queue", h.queue)
 		mux.HandleFunc("GET /v1/models", h.openAIModels)
 		mux.HandleFunc("POST /v1/chat/completions", h.chatCompletions)
+		mux.HandleFunc("POST /v1/responses", h.responses)
 		mux.HandleFunc("POST /v1/embeddings", h.embeddings)
 	}
 	h.mux = mux

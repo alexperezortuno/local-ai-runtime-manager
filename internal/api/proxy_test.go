@@ -67,6 +67,21 @@ func TestOpenAIModelsChatAndEmbeddings(t *testing.T) {
 	waitForAPI(t, func() bool { return manager.Status().PID == 0 })
 }
 
+func TestProxyUsesConfiguredLoopbackBackend(t *testing.T) {
+	manager, sched := apiTestScheduler(t)
+	if got := manager.Models()["model-1"].Host; got != "127.0.0.1" {
+		t.Fatalf("configured backend host = %q", got)
+	}
+	server := httptest.NewServer(NewHandler(manager, sched))
+	defer server.Close()
+
+	response := postJSON(t, server, "/v1/chat/completions", `{"model":"model-1"}`, "")
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("loopback proxy status = %d", response.StatusCode)
+	}
+}
+
 func TestInferenceRequestIDCollisionAndReadOnlyObservability(t *testing.T) {
 	manager, sched := apiTestScheduler(t)
 	registry := inference.New(inference.Options{})

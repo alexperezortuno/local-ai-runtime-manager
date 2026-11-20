@@ -13,7 +13,7 @@ LARM es un servicio Go independiente de clientes e IDEs que registra modelos GGU
 - `internal/api`: API HTTP con `net/http`.
 - `cmd/larm`: carga configuración, escucha y apagado ordenado.
 
-El listener HTTP local solo acepta direcciones IP loopback (`127.0.0.1` o `::1`). Un listener LAN nativo, explícito y separado puede habilitarse mediante `server.lan`; utiliza TLS, autenticación Bearer y una allowlist CIDR, y publica únicamente el endpoint de comprobación autenticada `GET /api/v1/lan/health`.
+El listener HTTP local solo acepta direcciones IP loopback (`127.0.0.1` o `::1`). Un listener LAN nativo, explícito y separado puede habilitarse mediante `server.lan`; utiliza TLS, autenticación Bearer y una allowlist CIDR, y publica el endpoint de comprobación autenticada `GET /api/v1/lan/health` junto con las rutas de inferencia OpenAI-compatible `GET /v1/models`, `POST /v1/chat/completions` y `POST /v1/embeddings`. Las peticiones LAN reutilizan el mismo Scheduler, las mismas leases y el mismo proxy que las peticiones locales; ver `docs/larm-008.2-remote-model-inference.md`.
 
 ## Requisitos
 
@@ -56,6 +56,7 @@ runtime:
 models:
   code-fast:
     path: "/models/code.gguf"
+    host: "127.0.0.1"
     port: 18069
     context: 16384
     batch: 1024
@@ -82,6 +83,9 @@ scheduler:
 ```
 
 Al iniciar se validan el binario ejecutable, los archivos, los IDs, puertos y parámetros. Cada modelo necesita un puerto propio, distinto del puerto de la API.
+
+La referencia de los parámetros opcionales de `llama.cpp` está en
+[`docs/larm-009-llamacpp-parameters.md`](docs/larm-009-llamacpp-parameters.md).
 
 ### Listener LAN autenticado
 
@@ -164,6 +168,40 @@ curl --cacert "$LARM_LAN_CA_FILE" \
   -H "Authorization: Bearer $LARM_LAN_API_KEYS" \
   https://192.169.0.228:8443/api/v1/lan/health
 ```
+
+### Inferencia remota sobre el listener LAN
+
+El listener LAN publica únicamente `GET /api/v1/lan/health`, `GET /v1/models`, `POST /v1/chat/completions`, `POST /v1/responses` y `POST /v1/embeddings`. Las peticiones reutilizan el mismo Scheduler, las mismas leases automáticas y el mismo proxy que las peticiones locales; el cliente nunca accede al puerto de `llama-server`. La API key LAN autentica al cliente ante LARM y no se reenvía al backend.
+
+```bash
+# Listado de modelos
+curl --cacert "$LARM_LAN_CA_FILE" \
+  -H "Authorization: Bearer $LARM_LAN_API_KEYS" \
+  https://192.168.1.20:8443/v1/models
+
+# Chat completion
+curl --cacert "$LARM_LAN_CA_FILE" \
+  -H "Authorization: Bearer $LARM_LAN_API_KEYS" \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"model-1","messages":[{"role":"user","content":"hola"}]}' \
+  https://192.168.1.20:8443/v1/chat/completions
+
+# Embeddings
+curl --cacert "$LARM_LAN_CA_FILE" \
+  -H "Authorization: Bearer $LARM_LAN_API_KEYS" \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"model-1","input":"hola"}' \
+  https://192.168.1.20:8443/v1/embeddings
+
+# Responses API (usada por Codex CLI)
+curl --cacert "$LARM_LAN_CA_FILE" \
+  -H "Authorization: Bearer $LARM_LAN_API_KEYS" \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"model-1","input":[{"role":"user","content":[{"type":"input_text","text":"hola"}]}]}' \
+  https://192.168.1.20:8443/v1/responses
+```
+
+Las rutas administrativas (`/api/v1/*`) y cualquier otra ruta responden `404` en el listener LAN. El detalle completo del contrato está en `docs/larm-008.2-remote-model-inference.md` y en `docs/larm-008.3-codex-responses-api.md`.
 
 Para pruebas locales puede generarse un certificado autofirmado, pero los clientes deberán configurarlo explícitamente:
 
@@ -271,7 +309,9 @@ Un fallo de arranque marca la lease `FAILED` y el worker continúa. Una caída i
 
 ### Proxy de inferencia OpenAI
 
-El proxy expone únicamente `GET /v1/models`, `POST /v1/chat/completions` y `POST /v1/embeddings`. No permite elegir URL/puerto del backend: el puerto se resuelve desde el registro de modelos configurados y las solicitudes pasan por el scheduler FIFO.
+El proxy expone únicamente `GET /v1/models`, `POST /v1/chat/completions`, `POST /v1/responses` y `POST /v1/embeddings`. No permite elegir URL/puerto del backend: el puerto se resuelve desde el registro de modelos configurados y las solicitudes pasan por el scheduler FIFO.
+
+`POST /v1/responses` implementa la OpenAI Responses API que consume Codex CLI. El proxy es transparente: reenvía el cuerpo de la petición y los eventos SSE sin transformarlos, de modo que el contrato lo define `llama-server`. La única diferencia con Chat Completions es el terminador del stream: la Responses API termina con el evento `response.completed` y no usa el centinela `data: [DONE]`. Codex CLI requiere `wire_api = "responses"`; los perfiles de referencia están en `configs/codex/` y el contrato completo en `docs/larm-008.3-codex-responses-api.md`.
 
 En modo automático (sin header de lease), cada inferencia crea una lease, espera su activación y la libera al finalizar. El modelo permanece protegido durante toda la llamada, incluida la transmisión SSE. Ejemplos:
 

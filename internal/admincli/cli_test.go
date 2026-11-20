@@ -353,6 +353,64 @@ func TestDoctorPassesOccupiedPortForVerifiedRuntimeBackend(t *testing.T) {
 	}
 }
 
+func TestDoctorLoadsExtendedLlamaConfiguration(t *testing.T) {
+	dir := t.TempDir()
+	model := filepath.Join(dir, "model.gguf")
+	binary := filepath.Join(dir, "llama-server")
+	if err := os.WriteFile(model, []byte("fixture"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nif [ \"$1\" = \"--help\" ]; then echo '--n-predict --flash-attn --device --n-gpu-layers --split-mode --metrics --fit --cache-prompt --no-mmproj'; fi\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	apiPort := freePort(t)
+	backendPort := freePort(t)
+	configPath := filepath.Join(dir, "models.yaml")
+	config := `server:
+  port: ` + strconv.Itoa(apiPort) + `
+runtime:
+  binary: "` + binary + `"
+models:
+  model:
+    path: "` + model + `"
+    port: ` + strconv.Itoa(backendPort) + `
+    context: 1024
+    batch: 128
+    ubatch: 32
+    gpu_layers: "0"
+    parallel: 1
+    n_predict: 0
+    flash_attn: auto
+    device: none
+    split_mode: layer
+    metrics: false
+    fit: false
+    cache_prompt: false
+    no_nmproj: false
+`
+	if err := os.WriteFile(configPath, []byte(config), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var output, errors strings.Builder
+	if code := RunReadOnly([]string{"-config", configPath, "-url", "http://127.0.0.1:1", "doctor"}, &output, &errors); code != 0 {
+		t.Fatalf("doctor code=%d output=%q stderr=%q", code, output.String(), errors.String())
+	}
+	if !strings.Contains(output.String(), "CONFIG\tPASS") {
+		t.Fatalf("doctor rejected extended configuration: %q", output.String())
+	}
+}
+
+func freePort(t *testing.T) int {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	_ = listener.Close()
+	return port
+}
+
 func TestCheckModelPortsAcceptsOnlyVerifiedReadyRuntime(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

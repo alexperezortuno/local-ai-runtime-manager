@@ -94,6 +94,155 @@ func TestLoadRejectsOutOfRangeSamplingParameters(t *testing.T) {
 	}
 }
 
+func TestLoadExtendedLlamaParameters(t *testing.T) {
+	dir := t.TempDir()
+	binary := writeHelpBinary(t, dir, `--presence-penalty --frequency-penalty --n-predict --repeat-penalty --flash-attn --device --n-gpu-layers --split-mode --metrics --fit --cache-prompt --no-mmproj`)
+	model := filepath.Join(dir, "model.gguf")
+	if err := os.WriteFile(model, []byte("model"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	content := strings.Replace(validYAML(model), "    top_p: 0.9\n", `    presence_penalty: 0
+    frequency_penalty: 0
+    n_predict: 0
+    repeat_penalty: 0
+    flash_attn: auto
+    device: "none"
+    n_gpu_layers: "all"
+    split_mode: none
+    metrics: false
+    fit: false
+    cache_prompt: false
+    no_nmproj: false
+    top_p: 0.9
+`, 1)
+	content = strings.Replace(content, "binary: /test/llama-server", "binary: "+binary, 1)
+	path := filepath.Join(dir, "models.yaml")
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	modelConfig := cfg.Models["test"]
+	if modelConfig.PresencePenalty == nil || *modelConfig.PresencePenalty != 0 ||
+		modelConfig.NPredict == nil || *modelConfig.NPredict != 0 ||
+		modelConfig.Metrics == nil || *modelConfig.Metrics ||
+		modelConfig.CachePrompt == nil || *modelConfig.CachePrompt ||
+		modelConfig.NoNMProj == nil || *modelConfig.NoNMProj ||
+		modelConfig.EffectiveGPULayers() != "all" {
+		t.Fatalf("extended options lost their explicit values: %+v", modelConfig)
+	}
+}
+
+func TestLoadAcceptsNGPULayersAsGPUAlias(t *testing.T) {
+	dir := t.TempDir()
+	binary := writeHelpBinary(t, dir, `--n-gpu-layers`)
+	model := filepath.Join(dir, "model.gguf")
+	_ = os.WriteFile(model, []byte("model"), 0600)
+	content := strings.Replace(validYAML(model), "    gpu_layers: all\n", `    n_gpu_layers: "0"
+`, 1)
+	content = strings.Replace(content, "binary: /test/llama-server", "binary: "+binary, 1)
+	path := filepath.Join(dir, "models.yaml")
+	_ = os.WriteFile(path, []byte(content), 0600)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Models["test"].EffectiveGPULayers() != "0" {
+		t.Fatalf("effective GPU layers = %q", cfg.Models["test"].EffectiveGPULayers())
+	}
+}
+
+func TestLoadRejectsExtendedParameterErrors(t *testing.T) {
+	dir := t.TempDir()
+	binary := writeHelpBinary(t, dir, `--presence-penalty --repeat-penalty --n-predict --flash-attn --device --split-mode --no-mmproj`)
+	model := filepath.Join(dir, "model.gguf")
+	_ = os.WriteFile(model, []byte("model"), 0600)
+	for _, test := range []struct {
+		name  string
+		field string
+		want  string
+	}{
+		{name: "n_predict below infinity sentinel", field: "n_predict: -2", want: "n_predict"},
+		{name: "repeat penalty negative", field: "repeat_penalty: -1", want: "repeat_penalty"},
+		{name: "flash enum", field: "flash_attn: maybe", want: "flash_attn"},
+		{name: "empty device", field: `device: ""`, want: "device"},
+		{name: "split enum", field: "split_mode: gpu", want: "split_mode"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			content := strings.Replace(validYAML(model), "    top_p: 0.9\n", "    "+test.field+"\n    top_p: 0.9\n", 1)
+			content = strings.Replace(content, "binary: /test/llama-server", "binary: "+binary, 1)
+			path := filepath.Join(dir, test.name+".yaml")
+			if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Load(path)
+			if err == nil || !strings.Contains(err.Error(), "models.test."+test.want) {
+				t.Fatalf("error = %v, want model and parameter %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsGPUAliasConflictAndExtraArgsDuplicate(t *testing.T) {
+	dir := t.TempDir()
+	binary := writeHelpBinary(t, dir, `--n-gpu-layers --presence-penalty`)
+	model := filepath.Join(dir, "model.gguf")
+	_ = os.WriteFile(model, []byte("model"), 0600)
+	for _, test := range []struct {
+		name  string
+		extra string
+		want  string
+	}{
+		{name: "gpu alias conflict", extra: "    n_gpu_layers: \"0\"\n", want: "gpu_layers and models.test.n_gpu_layers conflict"},
+		{name: "typed and extra args", extra: "    presence_penalty: 0.2\n    extra_args: [\"--presence-penalty\", \"0.1\"]\n", want: "models.test.presence_penalty"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			content := strings.Replace(validYAML(model), "    top_p: 0.9\n", test.extra+"    top_p: 0.9\n", 1)
+			content = strings.Replace(content, "binary: /test/llama-server", "binary: "+binary, 1)
+			path := filepath.Join(dir, test.name+".yaml")
+			if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Load(path)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestLoadRejectsUnsupportedExtendedParameter(t *testing.T) {
+	dir := t.TempDir()
+	binary := writeHelpBinary(t, dir, `--presence-penalty`)
+	model := filepath.Join(dir, "model.gguf")
+	_ = os.WriteFile(model, []byte("model"), 0600)
+	content := strings.Replace(validYAML(model), "    top_p: 0.9\n", "    device: Metal\n    top_p: 0.9\n", 1)
+	content = strings.Replace(content, "binary: /test/llama-server", "binary: "+binary, 1)
+	path := filepath.Join(dir, "models.yaml")
+	_ = os.WriteFile(path, []byte(content), 0600)
+	if _, err := Load(path); err == nil || !strings.Contains(err.Error(), "models.test.device") {
+		t.Fatalf("unsupported option error = %v", err)
+	}
+}
+
+func TestLoadRejectsIncorrectExtendedParameterTypes(t *testing.T) {
+	dir := t.TempDir()
+	binary := writeHelpBinary(t, dir, `--presence-penalty --metrics`)
+	model := filepath.Join(dir, "model.gguf")
+	_ = os.WriteFile(model, []byte("model"), 0600)
+	for _, field := range []string{"presence_penalty: not-a-number", `metrics: "true"`} {
+		content := strings.Replace(validYAML(model), "    top_p: 0.9\n", "    "+field+"\n    top_p: 0.9\n", 1)
+		content = strings.Replace(content, "binary: /test/llama-server", "binary: "+binary, 1)
+		path := filepath.Join(dir, strings.ReplaceAll(field, ":", "-")+".yaml")
+		_ = os.WriteFile(path, []byte(content), 0600)
+		if _, err := Load(path); err == nil {
+			t.Fatalf("accepted incorrect type in %q", field)
+		}
+	}
+}
+
 func TestLoadResidencyPolicy(t *testing.T) {
 	dir := t.TempDir()
 	binary := filepath.Join(dir, "llama-server")
@@ -201,4 +350,14 @@ func TestLoadRejectsAdmissionEnumsAndDurations(t *testing.T) {
 
 func validYAML(modelPath string) string {
 	return "runtime:\n  binary: /test/llama-server\nmodels:\n  test:\n    path: " + modelPath + "\n    port: 18069\n    context: 4096\n    batch: 512\n    ubatch: 128\n    gpu_layers: all\n    parallel: 1\n    top_p: 0.9\n"
+}
+
+func writeHelpBinary(t *testing.T, dir, flags string) string {
+	t.Helper()
+	path := filepath.Join(dir, "llama-server")
+	script := "#!/bin/sh\nif [ \"$1\" = \"--help\" ]; then\n  echo '" + flags + "'\nfi\n"
+	if err := os.WriteFile(path, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }

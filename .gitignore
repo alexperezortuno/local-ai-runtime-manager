@@ -10,6 +10,8 @@ skills-lock.json
 evidence/*
 configs/*
 !configs/models.example.yaml
+!configs/codex/
+!configs/codex/*.config.toml
 larm
 larm-recovery.json
 larm-recovery.json.operator.json

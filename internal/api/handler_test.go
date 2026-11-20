@@ -28,6 +28,13 @@ func ptr[T any](value T) *T {
 	return &value
 }
 
+// writeResponsesEvent writes one Responses API SSE event with the same
+// framing llama-server uses: "event: <name>\ndata: <json>\n\n".
+func writeResponsesEvent(w http.ResponseWriter, flusher http.Flusher, name, data string) {
+	_, _ = io.WriteString(w, "event: "+name+"\ndata: "+data+"\n\n")
+	flusher.Flush()
+}
+
 func TestMain(m *testing.M) {
 	if os.Getenv("LARM_API_CHILD") == "1" {
 		port := ""
@@ -81,6 +88,44 @@ func TestMain(m *testing.M) {
 				_, _ = io.WriteString(w, `{"object":"list","data":[{"object":"embedding","index":0,"embedding":[0.1,0.2]}],"model":"test","usage":{"prompt_tokens":2,"total_tokens":2}}`)
 				return
 			}
+			if r.URL.Path == "/v1/responses" {
+				// The llama-server /v1/responses contract: the terminal event is
+				// "response.completed" and the stream has no "[DONE]" sentinel.
+				if request.Stream {
+					w.Header().Set("Content-Type", "text/event-stream")
+					flusher, _ := w.(http.Flusher)
+					writeResponsesEvent(w, flusher, "response.created", `{"type":"response.created","response":{"id":"resp_test","object":"response","status":"in_progress"}}`)
+					writeResponsesEvent(w, flusher, "response.in_progress", `{"type":"response.in_progress","response":{"id":"resp_test","object":"response","status":"in_progress"}}`)
+					writeResponsesEvent(w, flusher, "response.output_item.added", `{"type":"response.output_item.added","item":{"id":"msg_test","type":"message","role":"assistant","status":"in_progress","content":[]}}`)
+					writeResponsesEvent(w, flusher, "response.content_part.added", `{"type":"response.content_part.added","item_id":"msg_test","part":{"type":"output_text","text":""}}`)
+					writeResponsesEvent(w, flusher, "response.output_text.delta", `{"type":"response.output_text.delta","item_id":"msg_test","delta":"one"}`)
+					if os.Getenv("LARM_API_BACKEND_MODE") == "hangstream" {
+						<-r.Context().Done()
+						return
+					}
+					if os.Getenv("LARM_API_BACKEND_MODE") == "truncated" {
+						return
+					}
+					if os.Getenv("LARM_API_BACKEND_MODE") == "toolcall" {
+						writeResponsesEvent(w, flusher, "response.output_item.added", `{"type":"response.output_item.added","item":{"id":"fc_call_1","type":"function_call","arguments":"","call_id":"call_1","name":"lookup","status":"in_progress"}}`)
+						writeResponsesEvent(w, flusher, "response.function_call_arguments.delta", `{"type":"response.function_call_arguments.delta","item_id":"fc_call_1","delta":"{\"q\":\"x\"}"}`)
+						writeResponsesEvent(w, flusher, "response.output_item.done", `{"type":"response.output_item.done","item":{"id":"fc_call_1","type":"function_call","status":"completed","arguments":"{\"q\":\"x\"}","call_id":"call_1","name":"lookup"}}`)
+						writeResponsesEvent(w, flusher, "response.completed", `{"type":"response.completed","response":{"id":"resp_test","object":"response","status":"completed","model":"test","created_at":1,"output":[{"id":"fc_call_1","type":"function_call","status":"completed","arguments":"{\"q\":\"x\"}","call_id":"call_1","name":"lookup"}],"usage":{"input_tokens":2,"output_tokens":1,"total_tokens":3,"input_tokens_details":{"cached_tokens":0}}}}`)
+						flusher.Flush()
+						return
+					}
+					writeResponsesEvent(w, flusher, "response.output_text.delta", `{"type":"response.output_text.delta","item_id":"msg_test","delta":"two"}`)
+					writeResponsesEvent(w, flusher, "response.output_text.done", `{"type":"response.output_text.done","item_id":"msg_test","text":"onetwo"}`)
+					writeResponsesEvent(w, flusher, "response.content_part.done", `{"type":"response.content_part.done","item_id":"msg_test","part":{"type":"output_text","annotations":[],"logprobs":[],"text":"onetwo"}}`)
+					writeResponsesEvent(w, flusher, "response.output_item.done", `{"type":"response.output_item.done","item":{"id":"msg_test","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","annotations":[],"logprobs":[],"text":"onetwo"}]}}`)
+					writeResponsesEvent(w, flusher, "response.completed", `{"type":"response.completed","response":{"id":"resp_test","object":"response","status":"completed","model":"test","created_at":1,"output":[{"id":"msg_test","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","annotations":[],"logprobs":[],"text":"onetwo"}]}],"usage":{"input_tokens":2,"output_tokens":2,"total_tokens":4,"input_tokens_details":{"cached_tokens":0}}}}`)
+					flusher.Flush()
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `{"id":"resp_test","object":"response","status":"completed","model":"test","created_at":1,"output":[{"id":"msg_test","type":"message","role":"assistant","status":"completed","content":[{"type":"output_text","annotations":[],"logprobs":[],"text":"ok"}]},{"id":"fc_call_1","type":"function_call","status":"completed","arguments":"{}","call_id":"call_1","name":"lookup"}],"usage":{"input_tokens":2,"output_tokens":1,"total_tokens":3,"input_tokens_details":{"cached_tokens":0}},"larm_backend_authorization":"`+r.Header.Get("Authorization")+`"}`)
+				return
+			}
 			if r.URL.Path != "/v1/chat/completions" {
 				http.NotFound(w, r)
 				return
@@ -102,7 +147,10 @@ func TestMain(m *testing.M) {
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = io.WriteString(w, `{"id":"chatcmpl-test","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok","tool_calls":[{"id":"call_1","type":"function"}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}`)
+			// The received Authorization header is echoed so the tests can
+			// prove the proxy never forwards the client credential to the
+			// backend.
+			_, _ = io.WriteString(w, `{"id":"chatcmpl-test","object":"chat.completion","choices":[{"index":0,"message":{"role":"assistant","content":"ok","tool_calls":[{"id":"call_1","type":"function"}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3},"larm_backend_authorization":"`+r.Header.Get("Authorization")+`"}`)
 		})}
 		go func() { _ = server.ListenAndServe() }()
 		signals := make(chan os.Signal, 1)
@@ -467,7 +515,7 @@ func apiTestSchedulerWithTTL(t *testing.T, ttl string) (*runtime.Manager, *sched
 		}
 		port := listener.Addr().(*net.TCPAddr).Port
 		_ = listener.Close()
-		models[fmt.Sprintf("model-%d", i)] = config.ModelConfig{Path: modelPath, Port: port, Context: 1024, Batch: 128, UBatch: 32, GPULayers: "all", Parallel: 1, Temperature: ptr(0.2), TopP: ptr(0.9)}
+		models[fmt.Sprintf("model-%d", i)] = config.ModelConfig{Path: modelPath, Host: "127.0.0.1", Port: port, Context: 1024, Batch: 128, UBatch: 32, GPULayers: "all", Parallel: 1, Temperature: ptr(0.2), TopP: ptr(0.9)}
 	}
 	binary, err := os.Executable()
 	if err != nil {

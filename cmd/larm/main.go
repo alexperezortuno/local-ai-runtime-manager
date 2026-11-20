@@ -69,6 +69,13 @@ func main() {
 		log.Fatalf("open inference recovery state: %v", err)
 	}
 	defer func() { _ = handler.(interface{ Close() error }).Close() }()
+	// The LAN listener reuses this very handler: the LAN requests share the
+	// Scheduler, the Runtime Manager, the Inference Registry and the backend
+	// client with the local requests.
+	proxy, ok := handler.(*api.Handler)
+	if !ok {
+		log.Fatalf("local handler does not expose the shared proxy")
+	}
 	// The capacity admission evaluator is installed only when the validated
 	// configuration enables it. With the default capacity.admission.enabled
 	// false no evaluator is installed, no admission worker is started and the
@@ -93,7 +100,7 @@ func main() {
 	var lanServer *http.Server
 	var lanListener net.Listener
 	if cfg.Server.LAN.Enabled {
-		lanHandler, err := api.NewLANHandler(cfg.Server.LAN)
+		lanHandler, err := api.NewLANHandlerWithProxy(cfg.Server.LAN, proxy)
 		if err != nil {
 			log.Fatalf("configure LAN authentication: %v", err)
 		}

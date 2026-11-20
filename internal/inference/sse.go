@@ -4,6 +4,11 @@ import "strings"
 
 // SSEParser retains only the current line and a tiny DONE candidate; it never
 // buffers prompts, completion chunks, or a complete response.
+//
+// It recognizes the two stream terminators of the OpenAI-compatible surface:
+// the Chat Completions sentinel "data: [DONE]" and the Responses API event
+// "event: response.completed", which is the terminal event of the Responses
+// stream. A Responses stream has no "[DONE]" sentinel.
 type SSEParser struct {
 	line       []byte
 	dataLines  uint8
@@ -51,6 +56,15 @@ func (p *SSEParser) lineEvent() {
 	line := strings.TrimSuffix(string(p.line), "\r")
 	if line == "" {
 		p.dispatch()
+		return
+	}
+	if strings.HasPrefix(line, "event:") {
+		// The Responses API names every event; its terminal event is
+		// "response.completed". Chat Completions streams have no event name.
+		name := strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+		if name == "response.completed" {
+			p.done = true
+		}
 		return
 	}
 	if !strings.HasPrefix(line, "data:") {

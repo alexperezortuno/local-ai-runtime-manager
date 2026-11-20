@@ -67,6 +67,14 @@ func (h *Handler) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	h.serveInference(w, r, "/v1/chat/completions", true)
 }
 
+// responses proxies the OpenAI Responses API. llama-server implements
+// /v1/responses natively, so the request body and the response events are
+// forwarded unchanged. The stream terminator is the "response.completed"
+// event, not the Chat Completions "[DONE]" sentinel.
+func (h *Handler) responses(w http.ResponseWriter, r *http.Request) {
+	h.serveInference(w, r, "/v1/responses", true)
+}
+
 func (h *Handler) embeddings(w http.ResponseWriter, r *http.Request) {
 	h.serveInference(w, r, "/v1/embeddings", false)
 }

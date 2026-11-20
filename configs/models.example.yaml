@@ -73,6 +73,7 @@ admin:
 models:
   code-fast:
     path: "/path/to/qwen-coder-14b.gguf"
+    host: "127.0.0.1"
     port: 18069
     context: 16384
     batch: 1024
@@ -93,6 +94,7 @@ models:
 
   code-agent:
     path: "/path/to/qwen-coder-30b.gguf"
+    host: "127.0.0.1"
     port: 18070
     context: 32768
     batch: 1024
