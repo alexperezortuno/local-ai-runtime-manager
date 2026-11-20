@@ -3,6 +3,7 @@ package recovery
 import (
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -59,6 +60,18 @@ func capabilityFixture(t *testing.T) (*Service, Capability, CapabilityPolicy, ed
 	if err != nil {
 		t.Fatal(err)
 	}
+	service.mu.Lock()
+	plan.SafetyClassification = SafeToResolve
+	plan.BlockingReasons = nil
+	service.plans[plan.PlanID] = plan
+	incident := service.incidents[chosen.IncidentID]
+	incident.Status = StatusReadyForReview
+	service.incidents[chosen.IncidentID] = incident
+	if err := service.persistLocked(); err != nil {
+		service.mu.Unlock()
+		t.Fatal(err)
+	}
+	service.mu.Unlock()
 	public, private, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -156,6 +169,115 @@ func TestCapabilityConcurrentReservationAndRevocation(t *testing.T) {
 	}
 	if result := service.ValidateCapability(capability, "uid:123", policy, time.Now().UTC()); result.Decision != Replayed {
 		t.Fatalf("revoked capability = %+v", result)
+	}
+}
+
+func TestBlockedRecoveryCapabilityIsNotExecutableAndRejectionIsDurable(t *testing.T) {
+	service, capability, policy, _ := capabilityFixture(t)
+	incident, err := service.Incident(capability.IncidentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.mu.Lock()
+	plan := service.plans[capability.PlanID]
+	plan.SafetyClassification = BlockedInconsistentState
+	service.plans[plan.PlanID] = plan
+	if err := service.persistLocked(); err != nil {
+		service.mu.Unlock()
+		t.Fatal(err)
+	}
+	service.mu.Unlock()
+
+	if _, err := service.PrepareCapability(CapabilityRequest{IncidentID: capability.IncidentID, PlanID: capability.PlanID, AllowedOperation: RecoveryReconcileAction, TTL: time.Minute}, "uid:123", policy, time.Now().UTC()); !errors.Is(err, errReconciliationIneligible) {
+		t.Fatalf("blocked prepare error = %v", err)
+	}
+	if result := service.ValidateCapability(capability, "uid:123", policy, time.Now().UTC()); result.Decision != Rejected {
+		t.Fatalf("blocked validation = %+v", result)
+	}
+	if result, err := service.ReserveCapability(capability, "uid:123", policy, time.Now().UTC()); err != nil || result.Decision != Rejected {
+		t.Fatalf("blocked reservation = %+v, err=%v", result, err)
+	}
+	service.mu.Lock()
+	_, reserved := service.capabilities[capability.CapabilityID]
+	service.mu.Unlock()
+	if reserved {
+		t.Fatal("blocked capability was inserted into reservations")
+	}
+
+	auth := Authorization{IncidentID: capability.IncidentID, PlanID: capability.PlanID, SnapshotVersion: capability.SnapshotVersion, EvidenceDigest: capability.EvidenceDigest, OperatorID: "uid:123", Authenticated: true, Mechanism: "unix-peer+ed25519", CapabilityID: capability.CapabilityID, Action: RecoveryReconcileAction}
+	if err := service.Execute(auth); !errors.Is(err, errReconciliationIneligible) {
+		t.Fatalf("blocked execution error = %v", err)
+	}
+	if _, err := service.Operation(capability.IncidentID, capability.PlanID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("blocked execution created operation: %v", err)
+	}
+	if err := service.Execute(auth); !errors.Is(err, errReconciliationIneligible) {
+		t.Fatalf("duplicate blocked execution error = %v", err)
+	}
+	audit, err := service.Audit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rejected *AuditEvent
+	reservedEvents := 0
+	for i := range audit {
+		if audit[i].Action == "RECONCILIATION_REJECTED" {
+			copy := audit[i]
+			rejected = &copy
+		}
+		if audit[i].Action == "CAPABILITY_RESERVED" {
+			reservedEvents++
+		}
+	}
+	if rejected == nil {
+		t.Fatalf("missing durable reconciliation rejection: %+v", audit)
+	}
+	if rejected.IncidentID != incident.IncidentID || rejected.PlanID != capability.PlanID || rejected.EvidenceDigest != capability.EvidenceDigest || rejected.CapabilityID != capability.CapabilityID || rejected.InstanceID != incident.LARMInstanceID || rejected.OperatorIdentity != "uid:123" || rejected.AuthorizationMechanism != "unix-peer+ed25519" || rejected.TechnicalClassification != BlockedInconsistentState {
+		t.Fatalf("rejection audit correlation = %+v", *rejected)
+	}
+	if reservedEvents != 0 {
+		t.Fatalf("blocked reservation audit = %d", reservedEvents)
+	}
+	reopened, err := Open(service.registry, nil, service.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopenedAudit, err := reopened.Audit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rejectedCount := 0
+	for _, event := range reopenedAudit {
+		if event.Action == "RECONCILIATION_REJECTED" {
+			rejectedCount++
+		}
+	}
+	if rejectedCount != 1 {
+		t.Fatalf("durable rejection count = %d, audit = %+v", rejectedCount, reopenedAudit)
+	}
+}
+
+func TestBlockedReconciliationAuditFailureFailsClosed(t *testing.T) {
+	service, capability, _, _ := capabilityFixture(t)
+	service.mu.Lock()
+	plan := service.plans[capability.PlanID]
+	plan.SafetyClassification = BlockedInconsistentState
+	service.plans[plan.PlanID] = plan
+	if err := service.persistLocked(); err != nil {
+		service.mu.Unlock()
+		t.Fatal(err)
+	}
+	service.mu.Unlock()
+	service.path = t.TempDir()
+	err := service.Execute(Authorization{IncidentID: capability.IncidentID, PlanID: capability.PlanID, SnapshotVersion: capability.SnapshotVersion, EvidenceDigest: capability.EvidenceDigest, OperatorID: "uid:123", Authenticated: true, Mechanism: "unix-peer+ed25519", CapabilityID: capability.CapabilityID, Action: RecoveryReconcileAction})
+	if !errors.Is(err, ErrAuditPersistence) {
+		t.Fatalf("audit failure = %v", err)
+	}
+	service.mu.Lock()
+	_, created := service.operations[reconciliationOperationKey(capability.IncidentID, capability.PlanID, capability.EvidenceDigest)]
+	service.mu.Unlock()
+	if created {
+		t.Fatal("audit failure created operation")
 	}
 }
 

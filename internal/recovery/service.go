@@ -153,21 +153,22 @@ type RecoveryPlan struct {
 }
 
 type AuditEvent struct {
-	EventID                string    `json:"event_id"`
-	IncidentID             string    `json:"incident_id"`
-	PlanID                 string    `json:"plan_id,omitempty"`
-	ModelID                string    `json:"model_id,omitempty"`
-	Timestamp              time.Time `json:"timestamp"`
-	Actor                  string    `json:"actor"`
-	OperatorIdentity       string    `json:"operator_identity,omitempty"`
-	CapabilityID           string    `json:"capability_id,omitempty"`
-	EvidenceDigest         string    `json:"evidence_digest,omitempty"`
-	InstanceID             string    `json:"instance_id,omitempty"`
-	AuthorizationMechanism string    `json:"authorization_mechanism,omitempty"`
-	Action                 string    `json:"action"`
-	Result                 string    `json:"result"`
-	Evidence               []string  `json:"evidence,omitempty"`
-	Rejection              string    `json:"rejection_reason,omitempty"`
+	EventID                 string               `json:"event_id"`
+	IncidentID              string               `json:"incident_id"`
+	PlanID                  string               `json:"plan_id,omitempty"`
+	ModelID                 string               `json:"model_id,omitempty"`
+	Timestamp               time.Time            `json:"timestamp"`
+	Actor                   string               `json:"actor"`
+	OperatorIdentity        string               `json:"operator_identity,omitempty"`
+	CapabilityID            string               `json:"capability_id,omitempty"`
+	EvidenceDigest          string               `json:"evidence_digest,omitempty"`
+	InstanceID              string               `json:"instance_id,omitempty"`
+	AuthorizationMechanism  string               `json:"authorization_mechanism,omitempty"`
+	TechnicalClassification SafetyClassification `json:"technical_classification,omitempty"`
+	Action                  string               `json:"action"`
+	Result                  string               `json:"result"`
+	Evidence                []string             `json:"evidence,omitempty"`
+	Rejection               string               `json:"rejection_reason,omitempty"`
 }
 
 type ReconciliationPhase string
@@ -445,8 +446,27 @@ func (s *Service) ExecuteContext(ctx context.Context, auth Authorization) error 
 		return ErrAdministrativeAuthentication
 	}
 	if plan.SafetyClassification != SafeToResolve {
+		rejection := AuditEvent{
+			IncidentID:              auth.IncidentID,
+			PlanID:                  auth.PlanID,
+			Actor:                   auth.OperatorID,
+			OperatorIdentity:        auth.OperatorID,
+			CapabilityID:            auth.CapabilityID,
+			EvidenceDigest:          auth.EvidenceDigest,
+			InstanceID:              s.incidents[auth.IncidentID].LARMInstanceID,
+			AuthorizationMechanism:  auth.Mechanism,
+			TechnicalClassification: plan.SafetyClassification,
+			Action:                  "RECONCILIATION_REJECTED",
+			Result:                  "REJECTED",
+			Rejection:               errReconciliationIneligible.Error(),
+		}
+		if err := s.auditLocked(rejection); err != nil {
+			s.storeError = fmt.Errorf("%w: %v", ErrAuditPersistence, err)
+			s.mu.Unlock()
+			return s.storeError
+		}
 		s.mu.Unlock()
-		return errors.New("reconciliation plan is not eligible")
+		return errReconciliationIneligible
 	}
 	opKey := reconciliationOperationKey(auth.IncidentID, auth.PlanID, auth.EvidenceDigest)
 	op, exists := s.operations[opKey]

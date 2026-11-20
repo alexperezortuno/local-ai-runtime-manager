@@ -18,7 +18,7 @@ import (
 	"local-ai-runtime/internal/recovery"
 )
 
-func TestPrivateSocketIssueInspectAndShutdown(t *testing.T) {
+func TestPrivateSocketRejectsBlockedRecoveryCapabilityAndShutsDown(t *testing.T) {
 	service, incidentID, planID, instanceID := authServiceFixture(t)
 	public, private, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -56,15 +56,25 @@ func TestPrivateSocketIssueInspectAndShutdown(t *testing.T) {
 		t.Fatalf("status identity = %q, err=%v", identity, err)
 	}
 	output := filepath.Join(dir, "capability.json")
-	metadata, err := Issue(cfg.SocketPath, privatePath, output, incidentID, planID, recovery.RecoveryReconcileAction, time.Minute)
+	if _, err := Issue(cfg.SocketPath, privatePath, output, incidentID, planID, recovery.RecoveryReconcileAction, time.Minute); err == nil {
+		t.Fatal("blocked recovery plan issued an executable capability")
+	}
+	if _, err := os.Stat(output); !os.IsNotExist(err) {
+		t.Fatalf("blocked capability file = %v", err)
+	}
+	audit, err := service.Audit()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if metadata["capability_id"] == nil || metadata["allowed_operation"] != recovery.RecoveryReconcileAction {
-		t.Fatalf("metadata = %#v", metadata)
+	found := false
+	for _, event := range audit {
+		if event.Action == "CAPABILITY_PREPARE_REJECTED" && event.IncidentID == incidentID && event.PlanID == planID {
+			found = true
+			break
+		}
 	}
-	if _, err := Inspect(cfg.SocketPath, output); err != nil {
-		t.Fatal(err)
+	if !found {
+		t.Fatalf("blocked prepare rejection was not audited: %+v", audit)
 	}
 	if err := server.Close(); err != nil {
 		t.Fatal(err)

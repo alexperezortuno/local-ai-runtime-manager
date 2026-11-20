@@ -24,10 +24,11 @@ const (
 )
 
 var (
-	ErrCapabilityInvalid = errors.New("invalid administrative capability")
-	ErrCapabilityExpired = errors.New("administrative capability expired")
-	ErrCapabilityReplay  = errors.New("administrative capability replayed")
-	ErrCapabilityScope   = errors.New("administrative capability scope is invalid")
+	ErrCapabilityInvalid        = errors.New("invalid administrative capability")
+	ErrCapabilityExpired        = errors.New("administrative capability expired")
+	ErrCapabilityReplay         = errors.New("administrative capability replayed")
+	ErrCapabilityScope          = errors.New("administrative capability scope is invalid")
+	errReconciliationIneligible = errors.New("reconciliation plan is not eligible")
 )
 
 type CapabilityDecision string
@@ -192,6 +193,9 @@ func (s *Service) PrepareCapability(req CapabilityRequest, operator string, poli
 		if incident.Status == StatusResolved {
 			return Capability{}, fmt.Errorf("%w: incident is already resolved", ErrCapabilityScope)
 		}
+		if plan.SafetyClassification != SafeToResolve {
+			return Capability{}, errReconciliationIneligible
+		}
 	}
 	id, err := randomID()
 	if err != nil {
@@ -292,13 +296,8 @@ func (s *Service) ValidateCapability(c Capability, operator string, policy Capab
 		return CapabilityResult{Decision: Replayed, Reason: "capability nonce has been revoked"}
 	}
 	if !modelAction {
-		plan, ok := s.plans[c.PlanID]
-		if !ok || plan.IncidentID != c.IncidentID {
-			return CapabilityResult{Decision: Rejected, Reason: ErrNotFound.Error()}
-		}
-		current := s.planForIncidentLocked(c.IncidentID)
-		if current.PlanID != c.PlanID || current.SnapshotVersion != c.SnapshotVersion || current.EvidenceDigest != c.EvidenceDigest {
-			return CapabilityResult{Decision: StalePlan, Reason: ErrPlanStale.Error()}
+		if _, err := s.reconcilePlanForCapabilityLocked(c); err != nil {
+			return capabilityPlanResult(err)
 		}
 	}
 	if c.CapabilityID == "" || c.Nonce == "" {
@@ -355,22 +354,21 @@ func (s *Service) AuthorizeCapability(c Capability, operator string, policy Capa
 // the recovery sidecar lock.
 func (s *Service) ReserveCapability(c Capability, operator string, policy CapabilityPolicy, now time.Time) (CapabilityResult, error) {
 	result, err := s.AuthorizeCapability(c, operator, policy, now)
-	if result.Decision == Replayed {
-		s.mu.Lock()
-		record, exists := s.capabilities[c.CapabilityID]
-		s.mu.Unlock()
-		if exists && record.Fingerprint == capabilityFingerprint(c) && record.IncidentID == c.IncidentID && record.PlanID == c.PlanID && record.EvidenceDigest == c.EvidenceDigest && record.AllowedOperation == c.AllowedOperation {
-			return CapabilityResult{Decision: Authorized, Reason: "durable reservation replay"}, err
-		}
-	}
 	if result.Decision != Authorized {
-		return result, err
+		if result.Decision != Replayed {
+			return result, err
+		}
 	}
 	if err != nil {
 		return result, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if c.AllowedOperation == RecoveryReconcileAction {
+		if _, planErr := s.reconcilePlanForCapabilityLocked(c); planErr != nil {
+			return capabilityPlanResult(planErr), nil
+		}
+	}
 	if record, ok := s.capabilities[c.CapabilityID]; ok {
 		if record.Fingerprint == capabilityFingerprint(c) && record.IncidentID == c.IncidentID && record.PlanID == c.PlanID && record.EvidenceDigest == c.EvidenceDigest && record.AllowedOperation == c.AllowedOperation {
 			return CapabilityResult{Decision: Authorized, Reason: "durable reservation replay"}, nil
@@ -384,6 +382,29 @@ func (s *Service) ReserveCapability(c Capability, operator string, policy Capabi
 		return CapabilityResult{Decision: Rejected, Reason: ErrAuditPersistence.Error()}, s.storeError
 	}
 	return result, nil
+}
+
+func (s *Service) reconcilePlanForCapabilityLocked(c Capability) (RecoveryPlan, error) {
+	plan, ok := s.plans[c.PlanID]
+	if !ok || plan.IncidentID != c.IncidentID {
+		return RecoveryPlan{}, ErrNotFound
+	}
+	current := s.planForIncidentLocked(c.IncidentID)
+	if current.PlanID != c.PlanID || current.SnapshotVersion != c.SnapshotVersion || current.EvidenceDigest != c.EvidenceDigest {
+		return RecoveryPlan{}, ErrPlanStale
+	}
+	if plan.SafetyClassification != SafeToResolve {
+		return RecoveryPlan{}, errReconciliationIneligible
+	}
+	return plan, nil
+}
+
+func capabilityPlanResult(err error) CapabilityResult {
+	decision := Rejected
+	if errors.Is(err, ErrPlanStale) {
+		decision = StalePlan
+	}
+	return CapabilityResult{Decision: decision, Reason: err.Error()}
 }
 
 func (s *Service) ConsumeCapability(c Capability, operator string, policy CapabilityPolicy, now time.Time) (CapabilityResult, error) {

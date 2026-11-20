@@ -21,3 +21,4 @@ larm-*.json
 *.srl
 *.cnf
 *.csr
+*.log
