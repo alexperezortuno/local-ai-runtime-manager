@@ -102,8 +102,14 @@ type LANAccessConfig struct {
 }
 
 type LANTLSConfig struct {
+	Enabled  *bool  `yaml:"enabled"`
 	CertFile string `yaml:"cert_file"`
 	KeyFile  string `yaml:"key_file"`
+}
+
+// UsesTLS preserves the original HTTPS behavior when enabled was omitted.
+func (c LANTLSConfig) UsesTLS() bool {
+	return c.Enabled == nil || *c.Enabled
 }
 
 type RuntimeConfig struct {
@@ -650,19 +656,21 @@ func (c *Config) validateLAN() error {
 			return fmt.Errorf("server.lan.access.allow contains invalid CIDR %q", cidr)
 		}
 	}
-	if lan.TLS.CertFile == "" || lan.TLS.KeyFile == "" {
-		return fmt.Errorf("server.lan.tls cert_file and key_file are required when LAN is enabled")
-	}
-	if !filepath.IsAbs(lan.TLS.CertFile) || !filepath.IsAbs(lan.TLS.KeyFile) {
-		return fmt.Errorf("server.lan.tls cert_file and key_file must be absolute paths")
-	}
-	for name, path := range map[string]string{"cert_file": lan.TLS.CertFile, "key_file": lan.TLS.KeyFile} {
-		info, err := os.Stat(path)
-		if err != nil {
-			return fmt.Errorf("server.lan.tls.%s: %w", name, err)
+	if lan.TLS.UsesTLS() {
+		if lan.TLS.CertFile == "" || lan.TLS.KeyFile == "" {
+			return fmt.Errorf("server.lan.tls cert_file and key_file are required when TLS is enabled")
 		}
-		if !info.Mode().IsRegular() {
-			return fmt.Errorf("server.lan.tls.%s must be a regular file", name)
+		if !filepath.IsAbs(lan.TLS.CertFile) || !filepath.IsAbs(lan.TLS.KeyFile) {
+			return fmt.Errorf("server.lan.tls cert_file and key_file must be absolute paths")
+		}
+		for name, path := range map[string]string{"cert_file": lan.TLS.CertFile, "key_file": lan.TLS.KeyFile} {
+			info, err := os.Stat(path)
+			if err != nil {
+				return fmt.Errorf("server.lan.tls.%s: %w", name, err)
+			}
+			if !info.Mode().IsRegular() {
+				return fmt.Errorf("server.lan.tls.%s must be a regular file", name)
+			}
 		}
 	}
 	return nil

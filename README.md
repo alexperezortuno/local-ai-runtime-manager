@@ -87,28 +87,29 @@ Al iniciar se validan el binario ejecutable, los archivos, los IDs, puertos y pa
 La referencia de los parámetros opcionales de `llama.cpp` está en
 [`docs/larm-009-llamacpp-parameters.md`](docs/larm-009-llamacpp-parameters.md).
 
-### Acceso HTTPS desde la LAN
+### Acceso HTTP o HTTPS desde la LAN
 
 El listener LAN está deshabilitado por defecto y es independiente del listener
-local. Para habilitarlo se requieren TLS, Bearer y una allowlist CIDR. El
+local. Para habilitarlo se requieren Bearer y una allowlist CIDR. TLS es
+opcional; sin TLS el tráfico y las credenciales no están cifrados. El
 listener local y el LAN son dos superficies distintas:
 
 ```mermaid
 flowchart LR
-    A["OpenCode / Cliente Linux"] -->|"HTTPS + Bearer"| B["LARM LAN HTTPS"]
+    A["OpenCode / Cliente Linux"] -->|"HTTP(S) + Bearer"| B["LARM LAN"]
     B --> C["LARM Core"]
     C -->|"Loopback"| D["llama-server"]
 ```
 
 - **API local de LARM:** `server.host` solo puede ser loopback y atiende por
   defecto en `127.0.0.1:8090`.
-- **Listener HTTPS LAN:** `server.lan.host:server.lan.port` es una IP no
-  loopback, con TLS, Bearer y ACL CIDR.
+- **Listener LAN:** `server.lan.host:server.lan.port` es una IP no loopback,
+  con Bearer y ACL CIDR; usa HTTP o HTTPS según `server.lan.tls.enabled`.
 - **Backend:** cada `models.<id>.host` debe configurarse como `127.0.0.1`
   (si se omite, LARM usa ese valor por defecto). El código permite otros hosts
   de modelo por compatibilidad; esos valores no cumplen el aislamiento
   requerido.
-- **Cliente remoto:** solo llama al endpoint HTTPS de LARM. Nunca debe llamar
+- **Cliente remoto:** llama al endpoint HTTP(S) de LARM. Nunca debe llamar
   directamente al puerto de `llama-server`.
 
 Las rutas LAN permitidas son exactamente
@@ -241,6 +242,7 @@ server:
       allow:
         - "192.168.1.0/24"
     tls:
+      enabled: true
       cert_file: "${LARM_TLS_DIR}/lan-cert.pem"
       key_file: "${LARM_TLS_DIR}/lan-key.pem"
 runtime:
@@ -260,15 +262,28 @@ models:
     parallel: 1
 ```
 
+Para HTTP, conserva la autenticación y la allowlist, pero desactiva TLS y
+omite los certificados:
+
+```yaml
+server:
+  lan:
+    tls:
+      enabled: false
+```
+
 Los campos efectivos son `server.host`/`port` (API local),
 `server.lan.enabled`/`host`/`port`, `server.lan.auth.type` (debe ser
 `bearer`), `server.lan.auth.api_keys_env`,
-`server.lan.access.allow`, `server.lan.tls.cert_file` y `key_file`.
-`cert_file` y `key_file` deben ser rutas absolutas y formar un par TLS válido.
+`server.lan.access.allow` y `server.lan.tls.enabled`. Con `enabled: true`,
+`cert_file` y `key_file` son obligatorios, deben ser rutas absolutas y formar
+un par TLS válido. Si `enabled` se omite, la presencia de esos campos conserva
+el comportamiento HTTPS anterior. Con `enabled: false`, no se necesitan
+certificados y el listener usa HTTP.
 En este ejemplo `${LARM_TLS_DIR}` se expande antes de validar el YAML; debe
-estar definida en el entorno que inicia LARM. Al cargar la configuración, LARM
-comprueba que ambos archivos existan y que `tls.LoadX509KeyPair` pueda cargar
-el par; si falla, no inicia el listener LAN.
+estar definida en el entorno que inicia LARM. Con TLS habilitado, LARM valida
+la pareja al cargar la configuración; ante errores de certificado no hace
+fallback a HTTP. En modo HTTP, no lee ni exige esos archivos.
 `server.lan.host` no puede ser loopback ni unspecified. El backend usa
 `models.<id>.host` y `port`; para aislamiento se debe usar `127.0.0.1`.
 

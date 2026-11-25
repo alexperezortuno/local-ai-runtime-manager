@@ -104,17 +104,21 @@ func main() {
 		if err != nil {
 			log.Fatalf("configure LAN authentication: %v", err)
 		}
-		certificate, err := tls.LoadX509KeyPair(cfg.Server.LAN.TLS.CertFile, cfg.Server.LAN.TLS.KeyFile)
-		if err != nil {
-			log.Fatalf("load LAN TLS certificate: %v", err)
-		}
 		lanServer = &http.Server{
 			Addr:              net.JoinHostPort(cfg.Server.LAN.Host, strconv.Itoa(cfg.Server.LAN.Port)),
 			Handler:           lanHandler,
 			ReadHeaderTimeout: 5 * time.Second,
 			IdleTimeout:       60 * time.Second,
 			MaxHeaderBytes:    16 << 10,
-			TLSConfig:         &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{certificate}},
+		}
+		if cfg.Server.LAN.TLS.UsesTLS() {
+			certificate, err := tls.LoadX509KeyPair(cfg.Server.LAN.TLS.CertFile, cfg.Server.LAN.TLS.KeyFile)
+			if err != nil {
+				log.Fatalf("load LAN TLS certificate: %v", err)
+			}
+			lanServer.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{certificate}}
+		} else {
+			log.Printf("WARNING: LAN listener is starting without TLS; credentials and traffic are not encrypted")
 		}
 		lanListener, err = net.Listen("tcp", lanServer.Addr)
 		if err != nil {
@@ -144,7 +148,11 @@ func main() {
 		lanErr = errs
 		go func() {
 			log.Printf("LARM LAN listening on %s", lanServer.Addr)
-			errs <- lanServer.ServeTLS(lanListener, "", "")
+			if cfg.Server.LAN.TLS.UsesTLS() {
+				errs <- lanServer.ServeTLS(lanListener, "", "")
+				return
+			}
+			errs <- lanServer.Serve(lanListener)
 		}()
 	}
 

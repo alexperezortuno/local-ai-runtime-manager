@@ -47,8 +47,10 @@ func Load(path string) (Config, error) {
 		return Config{}, err
 	}
 	if cfg.Server.LAN.Enabled {
-		if _, err := tls.LoadX509KeyPair(cfg.Server.LAN.TLS.CertFile, cfg.Server.LAN.TLS.KeyFile); err != nil {
-			return Config{}, fmt.Errorf("server.lan.tls: %w", err)
+		if cfg.Server.LAN.TLS.UsesTLS() {
+			if _, err := tls.LoadX509KeyPair(cfg.Server.LAN.TLS.CertFile, cfg.Server.LAN.TLS.KeyFile); err != nil {
+				return Config{}, fmt.Errorf("server.lan.tls: %w", err)
+			}
 		}
 		if err := validateLANCredentials(cfg.Server.LAN.Auth.APIKeysEnv); err != nil {
 			return Config{}, err

@@ -1,23 +1,36 @@
 server:
+  # Local API bind address. Optional; defaults to 127.0.0.1 and must remain loopback.
   host: "127.0.0.1"
+  # Local API port. Optional; defaults to 8090.
   port: 8090
 
-  # Native LAN listener. Disabled by default. When enabled, API keys are read
-  # from the named environment variable and TLS is mandatory. Never put API
-  # keys directly in this YAML file.
+  # Separate LAN API listener. Optional; defaults to disabled.
+  # When enabled, host, port, Bearer auth, and a non-empty CIDR allowlist are required.
   lan:
     enabled: false
+    # Required when LAN is enabled; must be a specific, non-loopback IP (not 0.0.0.0).
     host: "192.168.1.20"
+    # Required when LAN is enabled; must not conflict with another listener/model.
     port: 8443
     auth:
+      # Required when LAN is enabled; currently only "bearer" is supported.
       type: "bearer"
+      # Required when LAN is enabled; names an environment variable containing API keys.
+      # Never put API keys directly in this YAML file.
       api_keys_env: "LARM_LAN_API_KEYS"
     access:
+      # Required when LAN is enabled; CIDRs allowed to connect to the LAN listener.
       allow:
         - "192.168.1.0/24"
     tls:
-      cert_file: "/absolute/path/to/lan-cert.pem"
-      key_file: "/absolute/path/to/lan-key.pem"
+      # Optional. false starts HTTP and does not require certificate files.
+      # true starts HTTPS and requires a valid certificate/key pair below.
+      # If omitted, TLS stays enabled for compatibility with configs using cert/key.
+      enabled: false
+      # Required only when TLS is enabled (or enabled is omitted for legacy HTTPS).
+      # Use absolute paths. Leave unset for HTTP.
+      # cert_file: "/absolute/path/to/lan-cert.pem"
+      # key_file: "/absolute/path/to/lan-key.pem"
 
 runtime:
   backend: "llamacpp"

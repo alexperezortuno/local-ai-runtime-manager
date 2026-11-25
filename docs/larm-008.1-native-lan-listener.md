@@ -26,6 +26,7 @@ server:
     access:
       allow: ["192.168.1.0/24"]
     tls:
+      enabled: true
       cert_file: /absolute/path/lan-cert.pem
       key_file: /absolute/path/lan-key.pem
 ```
@@ -38,8 +39,8 @@ Reglas:
 - `auth.type` debe ser `bearer`; `auth.api_keys_env` nombra una variable de entorno, nunca una clave.
 - La variable indicada debe contener una o más claves separadas por comas. Ningún valor se persiste ni se registra.
 - `access.allow` es una allowlist CIDR explícita. Una dirección vacía deniega todo.
-- TLS exige `cert_file` y `key_file` absolutos y existentes. La pareja se valida con `tls.LoadX509KeyPair` al cargar la configuración.
-- No existe modo HTTP plano ni transporte cifrado externo integrado en este hito.
+- `tls.enabled: true` exige `cert_file` y `key_file` absolutos y existentes; la pareja se valida al cargar la configuración. Si `enabled` se omite, los campos de certificado conservan el comportamiento HTTPS anterior.
+- `tls.enabled: false` inicia HTTP y no exige certificados. Bearer y la allowlist CIDR siguen activos, pero las credenciales y el tráfico no están cifrados; úsese solo en una red de confianza o con cifrado externo.
 
 ## Arquitectura de listeners
 
@@ -56,7 +57,7 @@ Reglas:
 - Las claves se leen al arrancar y se comparan con `crypto/subtle.ConstantTimeCompare`.
 - La respuesta de fallo es `401` con cuerpo JSON uniforme y `WWW-Authenticate: Bearer`.
 - Las claves se guardan como hashes SHA-256 en memoria para no conservar el material original; la lista de variables permite rotación futura de múltiples variables/secretos.
-- TLS 1.2+ se configura directamente en el listener LAN mediante los archivos PEM indicados.
+- Con TLS activo, TLS 1.2+ se configura directamente en el listener LAN mediante los archivos PEM indicados. Un error de certificado impide iniciar; nunca hay fallback a HTTP.
 
 ## Riesgos residuales
 

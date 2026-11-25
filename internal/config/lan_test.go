@@ -1,10 +1,17 @@
 package config
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLANDefaultsDisabledAndOldConfigCompatible(t *testing.T) {
@@ -17,27 +24,61 @@ func TestLANDefaultsDisabledAndOldConfigCompatible(t *testing.T) {
 	}
 }
 
-func TestLANRequiresCredentialsAndSecureTransport(t *testing.T) {
+func TestLANHTTPAndHTTPSConfiguration(t *testing.T) {
 	t.Setenv("LARM_LAN_KEYS", "test-secret")
 	dir := t.TempDir()
 	certFile := filepath.Join(dir, "cert.pem")
 	keyFile := filepath.Join(dir, "key.pem")
-	_ = os.WriteFile(certFile, []byte("certificate"), 0600)
-	_ = os.WriteFile(keyFile, []byte("key"), 0600)
-	base := "server:\n  lan:\n    enabled: true\n    host: 192.168.1.20\n    port: 8443\n    auth:\n      type: bearer\n      api_keys_env: LARM_LAN_KEYS\n    access:\n      allow: [\"192.168.1.0/24\"]\n"
-	withoutTLS := base
-	withTLS := base + "    tls:\n      cert_file: " + certFile + "\n      key_file: " + keyFile + "\n"
-	for name, content := range map[string]string{"without TLS": withoutTLS, "with TLS": withTLS} {
-		t.Run(name, func(t *testing.T) {
-			path := writeConfigContent(t, content)
-			_, err := Load(path)
-			if name == "without TLS" && err == nil {
-				t.Fatal("expected plaintext LAN configuration to be rejected")
-			}
-			if name == "with TLS" && err == nil {
-				t.Fatal("expected invalid test certificate to be rejected")
-			}
-		})
+	base := "  lan:\n    enabled: true\n    host: 192.168.1.20\n    port: 8443\n    auth:\n      type: bearer\n      api_keys_env: LARM_LAN_KEYS\n    access:\n      allow: [\"192.168.1.0/24\"]\n"
+	t.Run("HTTP without certificates", func(t *testing.T) {
+		cfg, err := Load(writeValidConfig(t, base+"    tls:\n      enabled: false\n"))
+		if err != nil || cfg.Server.LAN.TLS.UsesTLS() {
+			t.Fatalf("HTTP config = %+v, err=%v", cfg.Server.LAN.TLS, err)
+		}
+	})
+	t.Run("HTTPS with certificates", func(t *testing.T) {
+		writeTestCertificate(t, certFile, keyFile)
+		content := base + "    tls:\n      enabled: true\n      cert_file: " + certFile + "\n      key_file: " + keyFile + "\n"
+		cfg, err := Load(writeValidConfig(t, content))
+		if err != nil || !cfg.Server.LAN.TLS.UsesTLS() {
+			t.Fatalf("HTTPS config = %+v, err=%v", cfg.Server.LAN.TLS, err)
+		}
+	})
+	t.Run("HTTPS without certificates", func(t *testing.T) {
+		if _, err := Load(writeValidConfig(t, base+"    tls:\n      enabled: true\n")); err == nil {
+			t.Fatal("expected HTTPS without certificates to fail")
+		}
+	})
+	t.Run("legacy TLS fields imply HTTPS", func(t *testing.T) {
+		writeTestCertificate(t, certFile, keyFile)
+		content := base + "    tls:\n      cert_file: " + certFile + "\n      key_file: " + keyFile + "\n"
+		cfg, err := Load(writeValidConfig(t, content))
+		if err != nil || !cfg.Server.LAN.TLS.UsesTLS() {
+			t.Fatalf("legacy TLS config = %+v, err=%v", cfg.Server.LAN.TLS, err)
+		}
+	})
+}
+
+func writeTestCertificate(t *testing.T, certFile, keyFile string) {
+	t.Helper()
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "localhost"}, NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, BasicConstraintsValid: true}
+	der, err := x509.CreateCertificate(rand.Reader, &template, &template, publicKey, privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := x509.MarshalPKCS8PrivateKey(privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(certFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: key}), 0600); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -46,7 +87,6 @@ func TestLANConfigurationValidation(t *testing.T) {
 		name, replacement string
 	}{
 		{"no auth", "    enabled: true\n    host: 192.168.1.20\n    port: 8443"},
-		{"no transport", "    enabled: true\n    host: 192.168.1.20\n    port: 8443\n    auth:\n      type: bearer\n      api_keys_env: LARM_LAN_KEYS\n    access:\n      allow: [\"192.168.1.0/24\"]"},
 		{"invalid host", "    enabled: true\n    host: invalid\n    port: 8443"},
 		{"duplicate port", "    enabled: true\n    host: 192.168.1.20\n    port: 8090"},
 	}
