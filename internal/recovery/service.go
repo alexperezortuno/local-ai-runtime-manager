@@ -899,7 +899,7 @@ func (s *Service) Refresh() error {
 		plan := buildPlan(incident, snapshotVersion)
 		if isEligiblePlan(incident) {
 			plan.SafetyClassification = SafeToResolve
-			plan.RequiredPreconditions = []string{"correlated process termination is verified", "all associated inferences are included", "scheduler lease is present", "administrative authorization is verified"}
+			plan.RequiredPreconditions = []string{"correlated process termination is verified", "all associated inferences are included", "scheduler lease is present or reconstructable from the correlated inference", "administrative authorization is verified"}
 			plan.VerifiedPreconditions = append([]string(nil), plan.RequiredPreconditions...)
 			plan.MissingEvidence = nil
 			plan.ProposedAction = "RECONCILE_PHYSICAL_CAPACITY"

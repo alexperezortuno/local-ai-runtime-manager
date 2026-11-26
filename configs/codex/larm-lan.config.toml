@@ -8,7 +8,7 @@
 # Uso previsto (NO se ejecuta automáticamente):
 #   cp configs/codex/larm-lan.config.toml "$CODEX_HOME/larm-lan.config.toml"
 #   export LARM_LAN_API_KEY='<clave de operador>'
-#   export CODEX_CA_CERTIFICATE='/path/to/larm-tls/larm-ca-cert.pem'
+#   # No se requiere certificado del cliente cuando LARM usa HTTP.
 #   codex -p larm-lan
 #
 # Este archivo no modifica la configuración operativa del usuario.
@@ -21,7 +21,7 @@ model_auto_compact_token_limit = 85000
 [model_providers.larm-lan]
 name = "LARM LAN"
 # El path "/v1" + RESPONSES_PATH "/responses" produce "/v1/responses".
-base_url = "https://192.169.0.228:8443/v1"
+base_url = "http://192.169.0.228:8443/v1"
 # Codex CLI 0.169.0 solo admite `wire_api = "responses"`.
 wire_api = "responses"
 # La credencial LAN viaja como `Authorization: Bearer <clave>`. LARM la

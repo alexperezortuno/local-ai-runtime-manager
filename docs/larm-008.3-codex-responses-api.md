@@ -385,11 +385,11 @@ Archivo: `configs/codex/larm-lan.config.toml`
 | Aspecto | Valor |
 |---|---|
 | Model ID | `code-agent` |
-| Base URL | `https://192.169.0.228:8443/v1` |
+| Base URL | `http://192.169.0.228:8443/v1` |
 | Wire API | `responses` |
 | Contexto | `98304` (`model_auto_compact_token_limit = 85000`) |
 | Autenticación | `env_key = "LARM_LAN_API_KEY"` → `Authorization: Bearer <clave>` |
-| Certificados TLS | `CODEX_CA_CERTIFICATE=/path/to/larm-ca-cert.pem` (CA privada de LARM) |
+| Certificados TLS | No requeridos cuando `server.lan.tls.enabled: false` |
 | Limitaciones | El host, el puerto y la allowlist CIDR son los de `server.lan` en la configuración de LARM. El cliente debe estar dentro de la allowlist. La clave es compartida por todos los clientes LAN. |
 
 Los tres perfiles se validaron con el Codex instalado sin ejecutar ninguna inferencia:
@@ -413,7 +413,6 @@ codex --disable incremental_tools -p larm-local
 # 3) LARM LAN
 cp configs/codex/larm-lan.config.toml "$CODEX_HOME/larm-lan.config.toml"
 export LARM_LAN_API_KEY='<clave de operador>'
-export CODEX_CA_CERTIFICATE='/path/to/larm-tls/larm-ca-cert.pem'
 codex --disable incremental_tools -p larm-lan
 ```
 
@@ -437,7 +436,7 @@ Se mantienen intactas las protecciones de LARM-008.1 y LARM-008.2:
 | `X-LARM-Execution-ID` | Se conserva y lo valida el proxy compartido (UUIDv4 canónico). El registro de inferencia se indexa por `requestID`, que es generado por LARM en LAN: un `Execution-ID` compartido por dos clientes produce dos registros independientes y no da acceso a la sesión ajena. |
 | Identificadores de respuesta | El payload de la Responses API solo contiene datos del backend (`resp_`, `msg_`, `fc_`, `call_`). LARM no expone `X-LARM-Lease-ID` ni ninguna identidad de lease en la respuesta. |
 | Rutas administrativas | `404` desde LAN: `/api/v1/status`, `/api/v1/models`, `/api/v1/processes`, `/api/v1/leases`, `/api/v1/recovery/*`, `/api/v1/capacity/*`, `/api/v1/admission/*`, `/api/v1/models/{id}/start`, `/api/v1/models/{id}/stop`, `/api/v1/inferences`, `/api/v1/queue`, `/health`. |
-| TLS | El listener LAN sirve solo HTTPS. Un cliente en claro recibe un fallo de handshake. |
+| Transporte | Con la configuración operativa actual (`server.lan.tls.enabled: false`) el listener LAN sirve HTTP; no requiere certificados en los clientes. |
 
 ---
 

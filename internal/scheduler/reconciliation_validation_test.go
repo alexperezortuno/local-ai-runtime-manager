@@ -109,6 +109,39 @@ func TestReconcileLeaseConcurrentIdenticalRequestsCommitOnce(t *testing.T) {
 	}
 }
 
+func TestReconcileAutomaticLeaseWithoutSchedulerRecordCreatesTerminalTombstone(t *testing.T) {
+	s := newScheduler(nil, SchedulerConfigForValidation())
+	s.idempotencyPath = filepath.Join(t.TempDir(), "idempotency.json")
+	s.releaseProtector = validationReconciliationProtector{}
+	request := ReconciliationRequest{
+		OperationKey:   "operation-automatic",
+		IncidentID:     "incident-automatic",
+		PlanID:         "plan-automatic",
+		EvidenceDigest: "digest-automatic",
+		LeaseID:        "lease-automatic",
+		ModelID:        "model-1",
+		RequestIDs:     []string{"request-automatic"},
+	}
+
+	got, err := s.ReconcileLease(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != request.LeaseID || got.Model != request.ModelID || got.State != Completed {
+		t.Fatalf("reconciled automatic lease = %+v", got)
+	}
+	status, err := s.Get(request.LeaseID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.State != Completed {
+		t.Fatalf("scheduler did not publish terminal tombstone: %+v", status)
+	}
+	if len(s.reconciliations) != 1 {
+		t.Fatalf("reconciliation records = %d, want 1", len(s.reconciliations))
+	}
+}
+
 func reconciliationFixture(t *testing.T) (*Scheduler, string, ReconciliationRequest) {
 	t.Helper()
 	s := newScheduler(nil, SchedulerConfigForValidation())

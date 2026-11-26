@@ -67,8 +67,16 @@ func (s *Scheduler) ReconcileLease(req ReconciliationRequest) (Lease, error) {
 				break
 			}
 		}
-		if !ok || proposed.Model != req.ModelID || proposed.State != RecoveryRequired {
-			return Lease{}, ErrIdempotencyRecovery
+		if ok {
+			if proposed.Model != req.ModelID || proposed.State != RecoveryRequired {
+				return Lease{}, ErrIdempotencyRecovery
+			}
+		} else {
+			// Automatic inference leases are intentionally not idempotency
+			// records. After a restart, verified runtime and registry evidence
+			// is sufficient to publish a terminal tombstone without restoring
+			// active ownership.
+			proposed = Lease{ID: req.LeaseID, Model: req.ModelID, State: Completed, CreatedAt: time.Now().UTC()}
 		}
 	}
 	proposed.State = Completed

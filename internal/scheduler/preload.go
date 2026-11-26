@@ -36,6 +36,9 @@ func (s *Scheduler) Preload() error {
 		}
 	}
 	sort.Strings(ids)
+	if len(ids) == 0 {
+		return nil
+	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()

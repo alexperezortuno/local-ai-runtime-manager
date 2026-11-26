@@ -79,6 +79,7 @@ func TestPreloadTimeAliveStartsTimerAndDoesNotReload(t *testing.T) {
 
 func TestPreloadSkipsModelsWithoutResidency(t *testing.T) {
 	m, s, _ := residencyScheduler(t, 1, map[string]config.ModelConfig{"model-1": {}})
+	s.SetAdmissionGate(blockedAdmissionGate{})
 	if err := s.Preload(); err != nil {
 		t.Fatal(err)
 	}

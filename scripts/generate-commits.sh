@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-API="http://127.0.0.1:8060/v1/chat/completions"
-MODEL="commit"
+API="http://127.0.0.1:8090/v1/chat/completions"
+MODEL="qwen2-coder-14B"
 
 EXCLUDE_EXT=()
 EXCLUDE_DIR=()
